@@ -1030,3 +1030,268 @@
       background: linear-gradient(135deg, #0d9488, #34d399) !important;
       color: #fff !important;
     }
+
+    /* =====================================================================
+       RESPONSIVIDADE — PC · Tablet · Celular
+       Somente acréscimos ao final do arquivo: o visual atual em telas
+       grandes permanece exatamente o mesmo.
+       ===================================================================== */
+
+    /* ---- Regras seguras em qualquer largura (só agem quando falta espaço) ---- */
+    html {
+      -webkit-text-size-adjust: 100%;
+    }
+
+    img,
+    video {
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* Campos nunca ultrapassam a largura do seu container */
+    input,
+    select {
+      max-width: 100%;
+    }
+
+    input[type="file"] {
+      min-width: 0;
+    }
+
+    /* Abas, cabeçalhos e barra do topo quebram linha em vez de criar
+       rolagem horizontal quando não cabe tudo de uma vez */
+    .tabs,
+    .card-header,
+    .card-header > div,
+    .stats-topbar,
+    .stats-topbar .nav-login,
+    #sistema-principal > div:first-child {
+      flex-wrap: wrap;
+    }
+
+    .card-header {
+      gap: 8px;
+    }
+
+    /* Nenhum campo de formulário "estoura" a linha */
+    .form-field {
+      min-width: 0;
+    }
+
+    /* Grades (gráficos, filtros e KPIs) nunca ultrapassam a tela:
+       min(360px, 100%) mantém o mesmo resultado no PC e evita
+       a largura mínima de 360px/180px em telas pequenas */
+    .charts-grid {
+      grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+    }
+
+    .stats-filters,
+    .kpi-grid {
+      grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+    }
+
+    .chart-card,
+    .kpi-card,
+    .table-wrapper {
+      min-width: 0;
+    }
+
+    .kpi-card {
+      overflow-wrap: break-word;
+    }
+
+    .info-box,
+    .warning-box,
+    .error-box,
+    .metodo-nota {
+      overflow-wrap: break-word;
+    }
+
+    /* ==================== TABLET / TELAS MÉDIAS (até 900px) ==================== */
+    @media (max-width: 900px) {
+
+      body {
+        padding: 14px;
+      }
+
+      .container {
+        padding: 20px;
+      }
+
+      .stats-wrap {
+        padding: 16px;
+      }
+
+      .stats-topbar {
+        padding: 10px 14px;
+      }
+
+      .stats-topbar .brand {
+        font-size: 16px;
+      }
+
+      .chart-card .chart-container {
+        height: 270px;
+      }
+    }
+
+    /* =========================== CELULAR (até 640px) =========================== */
+    @media (max-width: 640px) {
+
+      body {
+        padding: 10px;
+        background-attachment: scroll;
+      }
+
+      .container {
+        padding: 16px;
+      }
+
+      h1 {
+        font-size: 21px;
+      }
+
+      /* Tela de login: espaço extra no topo para o botão 📊 Estatísticas
+         não cobrir o título */
+      #tela-login {
+        padding: 64px 16px 22px !important;
+      }
+
+      /* Cabeçalho do sistema (título + usuário logado + Sair):
+         empilha em coluna e centraliza */
+      #sistema-principal > div:first-child {
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      #sistema-principal > div:first-child h1 {
+        font-size: 21px;
+        margin-bottom: 6px;
+      }
+
+      /* Abas mais compactas para caberem em poucas linhas */
+      .tab {
+        padding: 10px 16px;
+        font-size: 13px;
+      }
+
+      /* Formulários: o campo ocupa a linha quando não cabe ao lado de outro,
+         e os botões grandes ficam com boa área de toque */
+      .form-row {
+        gap: 10px;
+      }
+
+      .form-row .form-field {
+        flex: 1 1 140px !important;
+        min-width: 0 !important;
+      }
+
+      .form-row > button:not(.btn-sm) {
+        flex: 1 1 auto;
+        min-height: 42px;
+      }
+
+      .select-turma {
+        max-width: 100%;
+      }
+
+      /* Evita o zoom automático do iOS ao tocar em campos e selects */
+      input,
+      select,
+      textarea {
+        font-size: 16px !important;
+      }
+
+      /* Tabelas: uso da largura disponível em vez de 700px fixos
+         (as tabelas de notas continuam com rolagem horizontal,
+         pois suas colunas têm largura mínima própria) */
+      table {
+        min-width: 0;
+      }
+
+      th,
+      td {
+        padding: 8px 6px;
+      }
+
+      th.aluno-hdr {
+        min-width: 140px;
+      }
+
+      th.disc-col {
+        min-width: 150px;
+      }
+
+      .admin-notas-table th.disc-col {
+        min-width: 260px;
+      }
+
+      /* Estatísticas */
+      .stats-wrap {
+        padding: 14px;
+      }
+
+      .stats-topbar {
+        padding: 8px 12px;
+        gap: 8px;
+      }
+
+      .stats-topbar .brand {
+        font-size: 15px;
+      }
+
+      .stats-topbar .nav-login button {
+        min-height: 40px;
+        padding: 8px 14px;
+        font-size: 12px;
+      }
+
+      .stats-header h2 {
+        font-size: 18px;
+      }
+
+      .chart-card {
+        padding: 12px;
+      }
+
+      .chart-card .chart-container {
+        height: 250px;
+      }
+
+      .kpi-card {
+        padding: 14px;
+      }
+
+      .kpi-card .value {
+        font-size: 24px;
+      }
+    }
+
+    /* ======================= CELULARES PEQUENOS (até 380px) ==================== */
+    @media (max-width: 380px) {
+
+      body {
+        padding: 8px;
+      }
+
+      .container {
+        padding: 14px;
+      }
+
+      h1 {
+        font-size: 19px;
+      }
+
+      .tab {
+        padding: 9px 12px;
+        font-size: 12px;
+      }
+
+      .stats-topbar .brand {
+        font-size: 14px;
+      }
+
+      .chart-card .chart-container {
+        height: 230px;
+      }
+    }
