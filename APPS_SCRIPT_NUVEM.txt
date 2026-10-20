@@ -441,20 +441,99 @@ function limparBackupsAntigos_(pasta) {
 
 // ===================== INSTALAÇÃO / DISPARADOR SEMANAL =====================
 // Rode UMA vez (função "setup") → autoriza e cria tudo.
+// É seguro rodar de novo: só cria o que falta e NÃO duplica nada.
+// Cada passo é isolado em try/catch, para que um erro não derrube os próximos
+// (o motivo do setup antigo parar no meio).
 function setup() {
-  var id = obterOuCriarBanco_();
-  var pasta = obterOuCriarPasta_();
+  var erros = [];
 
-  Logger.log('1) Planilha de dados: ' + SpreadsheetApp.openById(id).getUrl());
-  Logger.log('2) Pasta de backups semanais: ' + pasta.getUrl());
-  Logger.log('3) ' + criarDisparadorSemanal());
-  Logger.log('4) ' + backupSemanalNoDrive());  // 1º backup imediato, para você já conferir
+  // Passo 1: planilha de dados (aba "DADOS")
+  try {
+    var id = obterOuCriarBanco_();
+    Logger.log('1) Planilha de dados: ' + SpreadsheetApp.openById(id).getUrl());
+  } catch (e) {
+    erros.push('1) Planilha: ' + e.message);
+  }
 
-  return 'Setup concluído - veja as URLs no painel Registro / Executions.';
+  // Passo 2: pasta de backups no Drive
+  try {
+    var pasta = obterOuCriarPasta_();
+    Logger.log('2) Pasta de backups semanais: ' + pasta.getUrl());
+  } catch (e) {
+    erros.push('2) Pasta no Drive: ' + e.message);
+  }
+
+  // Passo 3: disparador semanal (7 em 7 dias)
+  try {
+    Logger.log('3) ' + criarDisparadorSemanal());
+  } catch (e) {
+    erros.push('3) Disparador semanal: ' + e.message);
+  }
+
+  // Passo 4: 1º backup imediato, para você já conferir a pasta do Drive
+  try {
+    Logger.log('4) ' + backupSemanalNoDrive());
+  } catch (e) {
+    erros.push('4) Backup: ' + e.message);
+  }
+
+  if (erros.length) {
+    Logger.log('==== SETUP COM ERROS ====\n- ' + erros.join('\n- '));
+    Logger.log('Rode a função diagnosticoBackup() — ela mostra passo a passo onde quebra.');
+    return 'Setup com erro(s): ' + erros.join(' | ');
+  }
+  Logger.log('==== SETUP CONCLUÍDO SEM ERROS ====');
+  return 'Setup concluído sem erros.';
 }
 
-// Cria o disparador: a cada 7 dias, à HORA_BACKUP (padrão 06:00).
+// Diagnóstico: rode quando qualquer coisa falhar. Ela testa cada passo
+// isoladamente e escreve no Registro/Executions ✅ o que deu certo e
+// ❌ + a mensagem exata do que deu errado.
+function diagnosticoBackup() {
+  var ok = true;
+
+  function passo(nome, fn) {
+    try {
+      var r = fn();
+      Logger.log('✅ ' + nome + (r ? (' → ' + r) : ''));
+    } catch (e) {
+      ok = false;
+      Logger.log('❌ ' + nome + ' → ERRO: ' + e.message);
+    }
+  }
+
+  passo('Planilha de dados', function () {
+    var ssid = obterOuCriarBanco_();
+    return SpreadsheetApp.openById(ssid).getUrl();
+  });
+
+  passo('Ler dados da nuvem', function () {
+    var info = lerBanco_();
+    return 'versão ' + info.versao + ' | tem dados: ' + (info.dados ? 'SIM' : 'NÃO');
+  });
+
+  passo('Pasta de backups no Drive', function () {
+    return obterOuCriarPasta_().getUrl();
+  });
+
+  passo('Gerar o backup (.json)', function () {
+    return backupSemanalNoDrive();
+  });
+
+  passo('Disparador semanal', function () {
+    return temDisparador_() ? 'EXISTE — não precisa criar de novo' : ('AUSENTE → ' + criarDisparadorSemanal());
+  });
+
+  Logger.log(ok ? '==== TUDO OK ====' : '==== HÁ ERROS: veja as linhas ❌ acima ====');
+  return ok ? 'Tudo OK — veja o Registro.' : 'Há erros — veja as linhas ❌ no Registro.';
+}
+
+// Cria o disparador: a cada 7 dias, às HORA_BACKUP (padrão 06:00).
 // Pode ser rodada quantas vezes quiser: nunca duplica o disparador.
+//
+// ⚠️ O Google NÃO possui atMinute() — o método oficial é nearMinute()
+//    (a disparada acontece ±15 min do minuto informado). Esse era o motivo
+//    do erro "Cannot find function atMinute" ao rodar o setup().
 function criarDisparadorSemanal() {
   var existentes = ScriptApp.getProjectTriggers();
   for (var i = 0; i < existentes.length; i++) {
@@ -462,13 +541,37 @@ function criarDisparadorSemanal() {
       return 'Disparador semanal já estava criado (nada foi duplicado).';
     }
   }
-  ScriptApp.newTrigger('backupSemanalNoDrive')
-    .timeBased()
-    .everyWeeks(1)          // a cada 1 semana
-    .atHour(HORA_BACKUP)    // às 06:00
-    .atMinute(0)
-    .create();
-  return 'Disparador semanal CRIADO: toda semana, ' + HORA_BACKUP + 'h00 (fuso do script).';
+
+  // 1ª tentativa: toda SEGUNDA, ~06:00 (fuso do script)
+  try {
+    ScriptApp.newTrigger('backupSemanalNoDrive')
+      .timeBased()
+      .everyWeeks(1)                                // a cada 1 semana
+      .onWeekDay(ScriptApp.WeekDay.MONDAY)          // dia fixo
+      .atHour(HORA_BACKUP)                          // ~hora
+      .nearMinute(0)                                // minuto (±15 min)
+      .create();
+    return 'Disparador semanal CRIADO: toda SEGUNDA, ~' + HORA_BACKUP + 'h00 (fuso do script).';
+  } catch (e1) {
+    Logger.log('Aviso: 1ª tentativa falhou (' + e1.message + ') — tentando sem dia fixo.');
+  }
+
+  // 2ª tentativa: a cada 7 dias, ~06:00 (mesmo dia da semana do dia da criação)
+  try {
+    ScriptApp.newTrigger('backupSemanalNoDrive')
+      .timeBased()
+      .everyWeeks(1)
+      .atHour(HORA_BACKUP)
+      .nearMinute(0)
+      .create();
+    return 'Disparador semanal CRIADO: a cada 7 dias, ~' + HORA_BACKUP + 'h00 (fuso do script).';
+  } catch (e2) {
+    Logger.log('Aviso: 2ª tentativa falhou (' + e2.message + ') — criando no mínimo a frequência semanal.');
+  }
+
+  // 3ª tentativa: mínimo absoluto — a cada 7 dias, horário aleatório
+  ScriptApp.newTrigger('backupSemanalNoDrive').timeBased().everyWeeks(1).create();
+  return 'Disparador semanal CRIADO (modo mínimo): a cada 7 dias, em horário aleatório.';
 }
 
 function removerDisparadorSemanal() {
@@ -534,8 +637,15 @@ PASSO 2 — Autorizar (aparece 1 vez só)
        além de gerar o primeiro backup na hora para você conferir.
 
   ⚙️  Configure o fuso horário: Configurações do projeto (engrenagem, canto
-      superior) → Fuso horário → América/São_Paulo. (Senão o backup semanal
+      superior) → Fuso horário → América/Sao_Paulo. (Senão o backup semanal
       dispara na hora errada.)
+
+  ❗ SE O SETUP DER ERRO (ex.: "Cannot find function atMinute")
+     Não se preocupe: o setup é idempotente. Cole a VERSÃO ATUALIZADA do código
+     (a da PARTE 2 já vem corrigida e com try/catch em cada passo) e rode
+     "setup" de novo — ele recria só o que faltar, sem duplicar planilha,
+     pasta nem disparador. Depois rode  diagnosticoBackup()  para ver ✅/❌
+     de cada passo no Registro.
 
 PASSO 3 — Publicar como Aplicativo da Web
   1. Botão  DEPLOY  (canto superior) →  + Nova implantação  (New deployment).
@@ -556,7 +666,10 @@ PASSO 3 — Publicar como Aplicativo da Web
      • Se aparecer "não verificado" de novo, é só AVANÇADO → Ir → Permitir.
 
 PASSO 4 — Testar
-  • No editor: funções "statusDoSistema" e "backupSemanalNoDrive" → Executar.
+  • No editor: função  diagnosticoBackup()  → Executar. Ela testa cada passo
+    (planilha, leitura, pasta do Drive, geração do .json, disparador) e escreve
+    ✅ ou ❌ com a mensagem exata de qualquer falha.
+  • Também dá para rodar "statusDoSistema" e "backupSemanalNoDrive".
   • Navegador: veja PARTE 4 (botão "Testar Conexão").
   • Se a planilha "BD - Sistema de Notas (Apps Script)" não existir no Drive,
     rode "setup" de novo — ele só cria o que falta.
@@ -701,7 +814,16 @@ PARTE 8 — LIMITES / COTAS DO GOOGLE (são folgados para este app)
 ================================================================================
 PARTE 9 — SOLUÇÃO DE PROBLEMAS
 ================================================================================
-"Sfalha na conexão" / "Failed to fetch"
+Dica universal: rode a função  diagnosticoBackup() — ela executa cada passo
+isoladamente e escreve no Registro/Executions ✅ o que funcionou e ❌ + a
+mensagem exata do que falhou.
+
+"TypeError: Cannot find function atMinute" (erro no setup/backup semanal)
+  O Google não tem atMinute() — o método é  nearMinute()  (±15 min). Já está
+  corrigido no código da PARTE 2 (criarDisparadorSemanal usa nearMinute e ainda
+  tem 3 níveis de fallback). Coloque o código atualizado e rode setup() de novo.
+
+"Falha na conexão" / "Failed to fetch"
   1. URL é a de APLICATIVO DA WEB e termina em /exec? (não /dev, não link do editor)
   2. Deploy → "Quem tem acesso" = Qualquer pessoa?
   3. Você salvou o código DEPOIS do deploy? Se sim, atualize a implantação
