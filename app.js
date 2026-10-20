@@ -6,6 +6,13 @@
     const APPS_URL_PADRAO = 'https://script.google.com/macros/s/AKfycbwb2dJmD6DcF6Kx3IYUkX2FWT_tQ78XVFGspwrxFgSqvtzrXUs7HNuKxxU7eiXRmx9RzA/exec'; // ex.: https://script.google.com/macros/s/XXXX/exec
     const APPS_CHAVE_SECRETA = 'sn_CKmB5M38WP2zbeGTSOgfqcUYLJxakwrA';
 
+    // Versão exigida do backend (Código.gs do Apps Script). Se o script publicado
+    // for mais antigo, o site AVISA em vez de deixar as alterações sumirem em
+    // silêncio. Atualize o script conforme APPS_SCRIPT_NUVEM.txt e publique uma
+    // NOVA VERSÃO da implantação (DEPLOY → Gerenciar implantações → ✏ → + Nova versão).
+    const SCRIPT_BACKEND = 2;
+    const MSG_BACKEND_DESATUALIZADO = 'O Apps Script da nuvem está DESATUALIZADO: atualize o "Código.gs" com o código novo (APPS_SCRIPT_NUVEM.txt) e publique uma NOVA VERSÃO da implantação (DEPLOY → Gerenciar implantações → ✏ → + Nova versão → Implantar). Enquanto isso, turmas/disciplinas/alunos NÃO são gravados na planilha.';
+
     // ====================== SEGURANÇA ======================
     // Escapa caracteres especiais de HTML em valores digitados pelo usuário
     // (nomes de turmas, disciplinas, professores e alunos). Previne XSS armazenado:
@@ -46,10 +53,17 @@
 
     let salvandoNuvem = false;
     let filaSalvar = false;
-    let filaFull = false;
+    let filaFull = false;        // 'forcar' = substituir a nuvem inteira (restauração de backup)
+    let filaDiff = false;        // houve mudança estrutural → envia como remendo (diff)
     let filaOps = [];
     let ultimoEstadoCarga = null;
     let estadoVersao = 0;
+    let cargaInicialNuvem = null; // promessa da 1ª leitura da nuvem (trava o 1º salvamento)
+    let conflitosSeguidos = 0;
+    let backendOk = null;         // null = ainda não sabemos; false = Apps Script antigo
+    let baseAntesDaCarga = null;  // ultimoEstadoCarga antes do fetch — base para calcular
+                                  // os remendos locais sem misturar dados de quem salvou
+                                  // enquanto a leitura estava em andamento
 
     function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 9); }
 
@@ -76,13 +90,22 @@
       carregarStorageLocal();
       if (!estado.appsUrl) estado.appsUrl = APPS_URL_PADRAO; // nuvem embutida no HTML
       estado.modoAdmin = false;
+      // Dica de versão deixada por outra aba deste mesmo navegador: evita que o
+      // 1º salvamento saia com versao=0 e volte "conflito" sem motivo. A leitura
+      // da nuvem abaixo substitui pelo número real da planilha.
+      const versaoLocal = Number(localStorage.getItem('sistemaNotasVersao'));
+      if (Number.isFinite(versaoLocal) && versaoLocal > 0) estadoVersao = versaoLocal;
       const campoSenha = document.getElementById('input-senha-admin');
       if (campoSenha) campoSenha.value = estado.senhaAdmin || 'admin123';
       const campoUrl = document.getElementById('input-apps-url');
       if (campoUrl) campoUrl.value = estado.appsUrl || '';
       if (estado.appsUrl) {
-        // Tentar carregar os dados mais recentes da nuvem
-        carregarDaNuvem().then(aplicarDadosNuvem);
+        // Tentar carregar os dados mais recentes da nuvem.
+        // A promessa fica guardada: o 1º salvamento ESPERA esta leitura terminar
+        // (sem isso, uma alteração feita antes da resposta terminar sairia com a
+        // versão errada e apareceria "Conflito: outro usuário salvou dados mais recentes").
+        // O `true` preserva o que o usuário já teria editado nesse meio-tempo.
+        cargaInicialNuvem = carregarDaNuvem().then(function (d) { aplicarDadosNuvem(d, true); }).catch(function () { });
       }
     }
 
@@ -121,7 +144,8 @@
       estado.appsUrl = url;
       salvarStorageLocal();
       if (url) {
-        carregarDaNuvem().then(aplicarDadosNuvem);
+        // `true`: alterações feitas enquanto a nuvem carrega não podem sumir
+        carregarDaNuvem().then(function (d) { aplicarDadosNuvem(d, true); });
       }
       renderAppsStatus(url ? '✅ URL da nuvem configurada.' : 'ℹ️ Usando armazenamento local.');
     }
@@ -140,15 +164,30 @@
       try {
         const res = await fetch(urlApps('ping'));
         const dados = await res.json();
-        box.innerHTML = `<span style="color:#2e7d32;">✅ Conexão OK — resposta do servidor: ${esc(JSON.stringify(dados))}</span>`;
+        if (dados && dados.script === SCRIPT_BACKEND) {
+          box.innerHTML = `<span style="color:#2e7d32;">✅ Conexão OK — resposta do servidor: ${esc(JSON.stringify(dados))}</span>`;
+        } else {
+          box.innerHTML = `<span style="color:#c62828;">⚠️ ${esc(MSG_BACKEND_DESATUALIZADO)} Resposta do servidor: ${esc(JSON.stringify(dados))}</span>`;
+        }
       } catch (e) {
         box.innerHTML = `<span style="color:#c62828;">❌ Falha na conexão. Verifique a URL, o deploy (deve ser de "Acesso: qualquer pessoa") e a autorização. Erro: ${esc(e.message)}</span>`;
       }
     }
 
-    function agendarSalvarNuvem() {
-      // Salvamento completo (mudanças de estrutura: turmas, disciplinas, alunos).
-      filaFull = true;
+    // Guarda a versão também no localStorage: quando a página está aberta em mais
+    // de uma aba, a aba que salva avisa as outras — assim elas não ficam com a
+    // versão velha e não geram "conflito" a cada salvamento.
+    function guardarVersaoLocal(v) {
+      try { localStorage.setItem('sistemaNotasVersao', String(v)); } catch (e) { /* sem localStorage */ }
+    }
+
+    function agendarSalvarNuvem(forcar) {
+      // forcar = restauração de backup (substitui a planilha inteira, ignora versão).
+      // Caso comum (criar turma, aluno, disciplina, editar professor...): marcamos
+      // filaDiff e o envio vira um REMENDO — somente o que mudou desde o último
+      // estado confirmado pela nuvem — que é MESCLADO com o que outro usuário
+      // salvou, em vez de dar conflito (e descartar a alteração, como acontecia).
+      if (forcar) filaFull = 'forcar'; else filaDiff = true;
       filaSalvar = true;
       if (salvandoNuvem) return;
       // Debounce curto para agrupar alterações rápidas
@@ -170,27 +209,99 @@
       if (op) agendarSalvarNuvemOps(op);
     }
 
+    // ---------- REMENDOS (diff de estado) ----------
+    // Compara o último estado confirmado pela nuvem (base) com o estado atual
+    // (alvo) e devolve SÓ o que mudou. Cada remendo é um caminho completo:
+    //   { op:'caminho', caminho:['turmas', id, 'nome'], valor: 'X' }  → define
+    //   { op:'caminho', caminho:['turmas', id], remover: true }        → apaga
+    // Objetos são percorridos campo a campo (é isso que permite MESCLAR: as turmas
+    // que outro usuário criou não são tocadas). Arrays — alunos e disciplinas —
+    // são trocados inteiros, o caminho nunca "entra" dentro do array.
+    function computarRemendos(base, alvo) {
+      const remendos = [];
+      const ehObjeto = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+      const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+      function percorrer(caminho, b, a) {
+        if (igual(b, a)) return;
+        if (ehObjeto(b) && ehObjeto(a)) {
+          const chaves = {};
+          Object.keys(b).forEach(k => { chaves[k] = true; });
+          Object.keys(a).forEach(k => { chaves[k] = true; });
+          Object.keys(chaves).forEach(k => {
+            if (k === 'modoAdmin') return; // estado de sessão, não é dado da nuvem
+            const temBase = Object.prototype.hasOwnProperty.call(b, k);
+            const temAlvo = Object.prototype.hasOwnProperty.call(a, k);
+            if (!temAlvo) remendos.push({ op: 'caminho', caminho: caminho.concat(k), remover: true });
+            else if (!temBase || a[k] === undefined) remendos.push({ op: 'caminho', caminho: caminho.concat(k), valor: a[k] });
+            else percorrer(caminho.concat(k), b[k], a[k]);
+          });
+        } else {
+          remendos.push({ op: 'caminho', caminho: caminho.slice(), valor: a });
+        }
+      }
+      percorrer([], base || {}, alvo || {});
+      return remendos;
+    }
+
+    // Define ou apaga um caminho dentro de um objeto (mesma regra do servidor).
+    function definirCaminho(obj, caminho, valor, remover) {
+      if (!obj || typeof obj !== 'object' || !caminho || !caminho.length) return false;
+      let alvo = obj;
+      for (let i = 0; i < caminho.length - 1; i++) {
+        const k = caminho[i];
+        if (alvo === null || typeof alvo !== 'object' || Array.isArray(alvo)) return false;
+        if (alvo[k] === null || typeof alvo[k] !== 'object' || Array.isArray(alvo[k])) {
+          if (remover) return false; // não existe o que atravessar
+          alvo[k] = {};
+        }
+        alvo = alvo[k];
+      }
+      const ultimo = caminho[caminho.length - 1];
+      if (remover) {
+        if (alvo && typeof alvo === 'object' && !Array.isArray(alvo)) delete alvo[ultimo];
+      } else {
+        alvo[ultimo] = valor;
+      }
+      if (!obj.turmas) obj.turmas = {};
+      return true;
+    }
+
     async function processarFilaSalvar() {
       if (salvandoNuvem || !estado.appsUrl) return;
       salvandoNuvem = true;
       try {
+        // Espera a 1ª leitura da nuvem terminar (no máximo 10 s). Sem a versão
+        // real da planilha, o envio sairia com versao=0 e voltaria "conflito"
+        // sem que ninguém tivesse salvo nada por cima de você.
+        if (cargaInicialNuvem) {
+          const carga = cargaInicialNuvem;
+          await Promise.race([carga, new Promise(function (r) { setTimeout(r, 10000); })]);
+          if (cargaInicialNuvem === carga) cargaInicialNuvem = null;
+        }
+
         while (filaSalvar || filaOps.length) {
           filaSalvar = false;
-          // Envia o estado completo na primeira sincronização (estadoVersao = 0)
-          // ou quando houve mudança estrutural (filaFull).
-          const usarFullSync = estadoVersao <= 0;
-          const enviarFull = filaFull || usarFullSync;
-          if (enviarFull) {
-            filaFull = false;
-            // IMPORTANTE: NÃO esvazia filaOps aqui. Se o envio completo falhar
-            // (conflito), as ops pendentes são reaproveitadas para reaplicar a
-            // alteração do usuário sobre a versão mais recente (sem perder trabalho).
-          }
-          const isOps = !enviarFull && filaOps.length > 0;
 
-          const payloadObj = isOps
-            ? { acao: 'salvar', chave: APPS_CHAVE_SECRETA, versao: estadoVersao, operacoes: filaOps.slice() }
-            : { acao: 'salvar', chave: APPS_CHAVE_SECRETA, versao: estadoVersao, dados: estado };
+          const forcar = filaFull === 'forcar';
+          if (filaFull) filaFull = false;
+
+          // Mudança estrutural pendente → vira remendo (diff contra o último
+          // estado confirmado). Assim ela entra na MESMA fila das notas e é
+          // reaplicada por cima da versão nova em caso de conflito.
+          if (filaDiff) {
+            filaDiff = false;
+            const remendos = computarRemendos(ultimoEstadoCarga, estado);
+            if (remendos.length) filaOps = filaOps.concat(remendos);
+          }
+
+          const opsEnvio = filaOps.slice();
+          if (!opsEnvio.length && !forcar) continue; // nada pendente
+
+          const estadoEnvio = JSON.parse(JSON.stringify(estado));
+          const payloadObj = forcar
+            ? { acao: 'salvar', chave: APPS_CHAVE_SECRETA, versao: estadoVersao, dados: estadoEnvio, forcar: true }
+            : { acao: 'salvar', chave: APPS_CHAVE_SECRETA, versao: estadoVersao, operacoes: opsEnvio };
 
           const res = await fetch(estado.appsUrl, {
             method: 'POST',
@@ -199,54 +310,83 @@
             body: JSON.stringify(payloadObj)
           });
           const resp = await res.json();
+
           if (resp && resp.ok === true) {
-            ultimoEstadoCarga = JSON.parse(JSON.stringify(estado));
-            if (resp.versao !== undefined) estadoVersao = resp.versao;
-            if (isOps) filaOps.length = 0; // só limpa a fila depois que a nuvem confirmou
-            continue;
-          }
-          if (resp && resp.conflito) {
-            // Outro usuário salvou dados mais recentes: recarrega a versão atual
-            // para NÃO apagar o trabalho do colega e REAPLICA a alteração local
-            // por cima dela (em vez de exigir que o usuário refaça tudo).
-            const opsPendentes = filaOps.slice();
-            const houveEstrutural = enviarFull && opsPendentes.length === 0;
-            if (resp.dados) {
-              estadoVersao = resp.versao || 0;
-              ultimoEstadoCarga = resp.dados;
-              aplicarDadosNuvem(resp.dados);
-              if (opsPendentes.length) {
-                aplicarOpsLocal(opsPendentes);
-                filaOps = opsPendentes; // reenfileirado para envio por célula (não conflita)
-                salvarStorageLocal();
-                filaSalvar = true;
-              }
+            conflitosSeguidos = 0;
+            if (resp.versao !== undefined) {
+              estadoVersao = resp.versao;
+              guardarVersaoLocal(resp.versao);
             }
-            if (opsPendentes.length && !houveEstrutural) {
-              renderAppsStatus('⚙️ Conflito resolvido automaticamente: os dados mais recentes foram carregados e suas notas/conceitos foram reaplicados e reenviados.', 'aviso');
-            } else if (houveEstrutural) {
-              renderAppsStatus('⚠️ Conflito: outro usuário salvou dados mais recentes. A alteração estrutural (turmas/disciplinas/alunos) não pôde ser reaplicada sozinha — refaça-a. As notas/conceitos mais recentes foram carregados.', 'erro');
+            // Confirma na base APENAS o que foi enviado: alterações feitas durante
+            // o envio continuam pendentes e saem na próxima rodada.
+            if (forcar || !ultimoEstadoCarga) {
+              ultimoEstadoCarga = estadoEnvio;
+              filaOps.splice(0, filaOps.length);
             } else {
-              renderAppsStatus('⚠️ Conflito: outro usuário salvou dados mais recentes. Suas alterações foram recarregadas e serão reenviadas automaticamente.', 'erro');
+              aplicarOpsLocal(opsEnvio, ultimoEstadoCarga);
+              filaOps.splice(0, opsEnvio.length);
+            }
+            if (resp.script === SCRIPT_BACKEND) {
+              renderAppsStatus('✅ Salvo na nuvem.');
+            } else {
+              backendOk = false;
+              renderAppsStatus('⚠️ ' + MSG_BACKEND_DESATUALIZADO, 'erro');
             }
             continue;
           }
-          // Falha inesperada: mantém a fila pendente para tentar de novo na próxima alteração.
-          renderAppsStatus('⚠️ Falha ao salvar na nuvem: ' + (resp.mensagem || 'resposta inesperada'), 'erro');
+
+          if (resp && resp.conflito) {
+            conflitosSeguidos++;
+            if (resp.versao !== undefined) {
+              estadoVersao = resp.versao;
+              guardarVersaoLocal(resp.versao);
+            }
+            // Guarda TUDO o que ainda não estava confirmado (inclui alterações
+            // feitas durante o envio) antes de trocar o estado pela versão nova.
+            const pendentes = filaOps.concat(computarRemendos(ultimoEstadoCarga, estado));
+            filaDiff = false;
+            if (resp.dados) {
+              ultimoEstadoCarga = resp.dados;
+              aplicarDadosNuvem(resp.dados);  // estado = versão mais recente da nuvem
+              aplicarOpsLocal(pendentes);     // reaplica por cima: notas E estrutura
+              salvarStorageLocal();
+            }
+            filaOps = pendentes;
+            if (conflitosSeguidos >= 6) {
+              renderAppsStatus('⚠️ Salvamento adiado: outra pessoa está gravando agora e vocês se alternaram 6 vezes. Suas alterações continuam pendentes — edite qualquer campo de novo para reenviar.', 'erro');
+              break;
+            }
+            filaSalvar = true; // tenta de novo, agora com a versão correta
+            renderAppsStatus('⚙️ Conflito resolvido: os dados mais recentes foram carregados e suas alterações foram reaplicadas e reenviadas automaticamente.', 'aviso');
+            continue;
+          }
+
+          // Falha inesperada: mantém a fila pendente (reenvia na próxima alteração)
+          // e PARA o laço, para não ficar batendo no servidor em loop.
+          renderAppsStatus('⚠️ Falha ao salvar na nuvem: ' + ((resp && resp.mensagem) || 'resposta inesperada') + ' — suas alterações continuam pendentes e serão reenviadas na próxima edição.', 'erro');
+          break;
         }
       } catch (e) {
-        renderAppsStatus('⚠️ Não foi possível salvar na nuvem (offline?). ' + e.message, 'erro');
+        renderAppsStatus('⚠️ Não foi possível salvar na nuvem (offline?). ' + e.message + ' — suas alterações continuam pendentes e serão reenviadas na próxima edição.', 'erro');
       } finally {
         salvandoNuvem = false;
       }
     }
 
-    // Reaplica localmente as operações de célula (nota/conceito) pendentes sobre o
-    // estado mais recente carregado da nuvem, preservando o trabalho do usuário.
-    function aplicarOpsLocal(operacoes) {
+    // Reaplica localmente as operações pendentes (notas/conceitos/frequências
+    // E remendos de estrutura) sobre o estado mais recente carregado da nuvem,
+    // preservando o trabalho do usuário. `alvoEstado` permite reaplicar também
+    // sobre a base local (ultimoEstadoCarga) para registrar o que a nuvem aceitou.
+    function aplicarOpsLocal(operacoes, alvoEstado) {
+      const alvo = alvoEstado || estado;
       operacoes.forEach(op => {
         if (!op || !op.op) return;
-        const turma = getTurma(op.turmaId);
+        if (op.op === 'caminho') {
+          // Remendo de estrutura (criar/editar/apagar turma, disciplina, aluno...)
+          definirCaminho(alvo, op.caminho, op.valor, !!op.remover);
+          return;
+        }
+        const turma = alvo.turmas ? alvo.turmas[op.turmaId] : null;
         if (!turma) return; // a turma pode não existir na versão mais recente
         if (op.op === 'nota') {
           const notasBim = getNotasTurma(turma, op.bimestre);
@@ -293,13 +433,33 @@
 
     async function carregarDaNuvem() {
       if (!estado.appsUrl) return null;
+      // Guarda a base ANTES do fetch: carregarDaNuvem passa a atualizar
+      // ultimoEstadoCarga com a resposta, e os remendos das alterações locais
+      // precisam ser calculados contra a base ANTIGA (senão a diferença sairia
+      // invertida e apagaria dados de quem salvou junto).
+      baseAntesDaCarga = ultimoEstadoCarga;
       try {
         const res = await fetch(urlApps('carregar'));
         const resp = await res.json();
-        if (resp && resp.ok === true && resp.dados) {
-          ultimoEstadoCarga = resp.dados;
-          if (resp.versao !== undefined) estadoVersao = resp.versao;
-          return resp.dados;
+        if (resp && resp.ok === true) {
+          // A versão é lida MESMO quando a planilha ainda está vazia: sem ela o
+          // 1º salvamento sairia com versao=0 e voltaria "conflito" à toa.
+          if (resp.versao !== undefined) {
+            estadoVersao = resp.versao;
+            guardarVersaoLocal(resp.versao);
+          }
+          backendOk = (resp.script === SCRIPT_BACKEND);
+          if (resp.dados) {
+            ultimoEstadoCarga = resp.dados;
+            return resp.dados;
+          }
+          ultimoEstadoCarga = null;
+          if (!backendOk) {
+            renderAppsStatus('⚠️ ' + MSG_BACKEND_DESATUALIZADO, 'erro');
+          } else {
+            renderAppsStatus((resp && resp.mensagem) ? ('ℹ️ ' + resp.mensagem) : 'ℹ️ Nenhum dado na nuvem ainda.', 'aviso');
+          }
+          return null;
         }
         renderAppsStatus((resp && resp.mensagem) ? ('ℹ️ ' + resp.mensagem) : 'ℹ️ Nenhum dado na nuvem ainda.', 'erro');
         return null;
@@ -325,8 +485,24 @@
       }
     }
 
-    function aplicarDadosNuvem(dadosNuvem) {
+    // `preservarLocais`: quando a leitura da nuvem termina DEPOIS de o usuário
+    // já ter editado algo (primeiros segundos da página ou ao trocar a URL),
+    // as alterações locais ainda não confirmadas não podem sumir ao trocar o
+    // estado pelo servidor: entram na fila e são reaplicadas por cima.
+    function aplicarDadosNuvem(dadosNuvem, preservarLocais) {
       if (!dadosNuvem || typeof dadosNuvem !== 'object') return;
+      let pendentes = [];
+      if (preservarLocais) {
+        // Só dá para separar "o que o usuário mudou" quando existe uma base
+        // confirmada; sem base, mantém ao menos as células digitadas (filaOps).
+        if (filaDiff && baseAntesDaCarga) {
+          const remendos = computarRemendos(baseAntesDaCarga, estado);
+          if (remendos.length) filaOps = filaOps.concat(remendos);
+          filaDiff = false;
+        }
+        pendentes = filaOps.slice();
+        baseAntesDaCarga = null;
+      }
       // Mantém preferências locais que não devem vir da nuvem
       const senhaAtual = estado.senhaAdmin;
       const appsUrlAtual = estado.appsUrl;
@@ -335,11 +511,15 @@
       estado.appsUrl = appsUrlAtual || estado.appsUrl || '';
       if (typeof estado.senhaAdmin !== 'string' || !estado.senhaAdmin) estado.senhaAdmin = senhaAtual;
       if (!estado.turmas) estado.turmas = {};
+      if (pendentes.length) aplicarOpsLocal(pendentes, estado); // reaplica o que o usuário já tinha editado
       const campoSenha = document.getElementById('input-senha-admin');
       if (campoSenha) campoSenha.value = estado.senhaAdmin || 'admin123';
       const campoUrl = document.getElementById('input-apps-url');
       if (campoUrl) campoUrl.value = estado.appsUrl || '';
-      renderAppsStatus('✅ Dados carregados da nuvem.');
+      renderAppsStatus(
+        backendOk === false ? ('⚠️ ' + MSG_BACKEND_DESATUALIZADO) : '✅ Dados carregados da nuvem.',
+        backendOk === false ? 'erro' : undefined
+      );
       if (perfilAtual) {
         renderAbaAtiva();
       } else {
@@ -482,8 +662,9 @@
       if (selectBim) selectBim.value = String(estado.bimestreAtual);
       const totalTurmas = Object.keys(estado.turmas).length;
       if (enviarNuvem && estado.appsUrl) {
-        // Envia o backup restaurado para a nuvem (sem gravar no localStorage).
-        agendarSalvarNuvem();
+        // Envia o backup restaurado para a nuvem, SOBRESCRIVENDO-a por completo
+        // (é a intenção de uma restauração, confirmada pelo usuário no diálogo).
+        agendarSalvarNuvem(true);
         renderBackupStatus('✅ Backup restaurado com sucesso (' + origem + '): ' +
           totalTurmas + ' turma(s) recuperada(s) e enviadas para a nuvem.');
       } else if (enviarNuvem) {
@@ -4523,6 +4704,13 @@
     carregarStorage();
 
     window.addEventListener('storage', function (e) {
+      if (e.key === 'sistemaNotasVersao' && e.newValue) {
+        // Outra aba deste navegador salvou na nuvem: adota a versão nova para
+        // não gerar "conflito" quando você editar por aqui.
+        const v = Number(e.newValue);
+        if (Number.isFinite(v)) estadoVersao = v;
+        return;
+      }
       if (e.key === 'sistemaNotasTurmas' && e.newValue) {
         try {
           const dadosNovos = JSON.parse(e.newValue);

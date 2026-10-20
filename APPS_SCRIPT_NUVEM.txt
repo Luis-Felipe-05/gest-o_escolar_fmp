@@ -28,21 +28,34 @@ Este script É o servidor. Ele fica rodando "na nuvem" do Google e expõe uma UR
 Ações que o site usa (já implementadas abaixo):
 
   GET  .../exec?acao=ping&chave=XXX        → teste de conexão (botão "Testar Conexão")
-  GET  .../exec?acao=carregar&chave=XXX    → devolve { dados, versao } (estado inteiro)
-  POST .../exec  corpo { acao:'salvar', chave, versao, dados }         → salva tudo
-  POST .../exec  corpo { acao:'salvar', chave, versao, operacoes }     → salva só as
-             células alteradas (nota / conceito / frequência / situação)
-                                                                 ▲
-        Isso evita que a nota de um professor sobrescreva a do outro.
+                                             + informa a URL exata da planilha usada
+  GET  .../exec?acao=carregar&chave=XXX    → devolve { dados, versao, script } (estado inteiro)
+  POST .../exec  corpo { acao:'salvar', chave, versao, operacoes }     → salva só o que
+             mudou: células (nota / conceito / frequência / situação) e
+             REMENDOS de estrutura { op:'caminho', caminho:[...], valor }
+             ▲
+        Isso evita que a nota de um professor sobrescreva a do outro e permite
+        que a turma/aluno criado por você seja MESCLADO com o que o colega
+        salvou ao mesmo tempo (em vez de virar "conflito").
+  POST .../exec  corpo { acao:'salvar', chave, versao, dados, forcar:true }
+                                                              → usa só na
+        RESTAURAÇÃO DE BACKUP (substitui a planilha inteira, ignorando a versão)
+
+  Toda resposta traz "script": 2. Se o site receber uma resposta SEM esse campo,
+  é sinal de que o Apps Script publicado está desatualizado — o app avisa em vez
+  de deixar as alterações sumirem em silêncio.
 
 Onde os dados ficam guardados?
   → Numa planilha do Google Sheets chamada "BD - Sistema de Notas (Apps Script)",
     criada AUTOMATICAMENTE na primeira execução. O JSON é guardado fatiado em
     linhas (a planilha tem limite de 50.000 caracteres por célula; usamos 40.000).
+    O botão "Testar Conexão" mostra a URL EXATA dessa planilha — se você não
+    acha a aba DADOS, confira se está abrindo a planilha certa do Drive.
   → A "versão" (número) também fica na planilha. Ela serve para detectar CONFLITO:
-    se duas pessoas salvam ao mesmo tempo, o script devolve { conflito:true } e o
-    app carrega os dados mais recentes e reaplica as alterações por cima
-    (tudo isso já está no app.js).
+    se duas pessoas salvam ao mesmo tempo, o script devolve { conflito:true,
+    versao, dados } e o app carrega a versão nova, reaplica por cima o que você
+    digitou (notas E turmas/alunos) e reenvia — tudo automaticamente, sem você
+    precisar refazer nada (tudo isso já está no app.js).
 
 Segurança:
   → Toda chamada precisa da CHAVE_SECRETA. Sem a chave, o script responde erro.
@@ -94,6 +107,11 @@ var TAM_FRAGMENTO     = 40000;   // caracteres por célula (limite do Sheets = 5
 var MAX_BACKUPS       = 12;      // quantos arquivos .json manter na pasta (≈ 3 meses)
 var HORA_BACKUP       = 6;       // hora (0-23) do backup semanal, fuso do script
 
+// Versão deste backend. É devolvida em todas as respostas; o site (app.js)
+// confere esse número e AVISA se o script publicado estiver desatualizado —
+// assim nenhuma alteração se perde em silêncio.
+var SCRIPT_VERSAO = 2;
+
 var PROP_SS    = 'SPREADSHEET_ID';
 var PROP_PASTA = 'PASTA_BACKUP_ID';
 
@@ -132,12 +150,20 @@ function doGet(e) {
 
     if (acao === 'ping') {
       var info = lerBanco_();
+      // Mostra QUAL planilha está sendo usada — se você "não acha" os dados na
+      // aba DADOS, é bem possível que exista mais de uma planilha no Drive e
+      // você esteja abrindo a errada.
+      var planilhaUrl = '';
+      try { planilhaUrl = SpreadsheetApp.openById(obterOuCriarBanco_()).getUrl(); }
+      catch (e2) { planilhaUrl = 'não foi possível ler: ' + e2.message; }
       return json_({
         ok: true,
         pong: true,
+        script: SCRIPT_VERSAO,
         projeto: 'sistema-notas-turmas',
         versao: info.versao,
         temDados: !!info.dados,
+        planilha: planilhaUrl,
         atualizadoEm: info.atualizadoEm,
         backupSemanalAtivo: temDisparador_(),
         mensagem: 'Conexão OK com o Apps Script.'
@@ -147,7 +173,7 @@ function doGet(e) {
     if (acao === 'carregar') {
       var atual = lerBanco_();
       // ok:true + dados:null = "nuvem ainda vazia" (o app mostra "Nenhum dado na nuvem ainda.")
-      return json_({ ok: true, dados: atual.dados || null, versao: atual.versao });
+      return json_({ ok: true, script: SCRIPT_VERSAO, dados: atual.dados || null, versao: atual.versao });
     }
 
     return json_({ ok: false, mensagem: 'Ação desconhecida: ' + acao });
@@ -189,10 +215,15 @@ function doPost(e) {
     var versaoServidor = info.versao;
     var dadosServidor = info.dados || { turmas: {} };
 
+    // "forcar" vem só da RESTAURAÇÃO DE BACKUP (o usuário confirmou no diálogo
+    // que quer substituir a nuvem inteira) — nesse caso a versão é ignorada.
+    var forcar = (corpo.forcar === true);
+
     // ---- CONFLITO: outro usuário gravou depois que este navegador leu ----
-    if (versaoCliente !== versaoServidor) {
+    if (!forcar && versaoCliente !== versaoServidor) {
       return json_({
         conflito: true,
+        script: SCRIPT_VERSAO,
         versao: versaoServidor,
         dados: dadosServidor,
         mensagem: 'Os dados da nuvem estão mais novos que a sua cópia local.'
@@ -208,8 +239,8 @@ function doPost(e) {
       novosDados = JSON.parse(JSON.stringify(dadosServidor));
       aplicarOperacoes_(novosDados, operacoes);
     } else if (corpo.dados && typeof corpo.dados === 'object') {
-      // Completo: estrutura nova (turmas/disciplinas/alunos) ou 1º sincronismo
-      novosDados = JSON.parse(JSON.stringify(corpor.dados));
+      // Completo: restauração de backup (forcar) ou 1º sincronismo
+      novosDados = JSON.parse(JSON.stringify(corpo.dados));
       if (!novosDados.turmas || typeof novosDados.turmas !== 'object') novosDados.turmas = {};
     } else {
       return json_({ ok: false, mensagem: 'Requisição sem "dados" e sem "operacoes".' });
@@ -218,7 +249,7 @@ function doPost(e) {
     var novaVersao = versaoServidor + 1;
     gravarBanco_(novaVersao, novosDados);
 
-    return json_({ ok: true, versao: novaVersao, gravadoEm: new Date().toISOString() });
+    return json_({ ok: true, script: SCRIPT_VERSAO, versao: novaVersao, gravadoEm: new Date().toISOString() });
   } catch (err) {
     return json_({ ok: false, mensagem: 'Erro ao salvar: ' + err.message });
   } finally {
@@ -227,14 +258,26 @@ function doPost(e) {
 }
 
 // Aplica no servidor as mesmas operações que o app.js aplica no navegador:
-// op = { op:'nota'|'conceito'|'frequencia'|'situacao', turmaId, disciplinaId,
-//        alunoId, bimestre, valor }
+//   op célula = { op:'nota'|'conceito'|'frequencia'|'situacao', turmaId,
+//                 disciplinaId, alunoId, bimestre, valor }
+//   remendo   = { op:'caminho', caminho:['turmas', id, 'nome'], valor } (define)
+//                                            ou { ..., remover:true }  (apaga)
+// Os remendos vêm de um diff contra o último estado que este cliente confirmou:
+// como só mexem no que mudou, dá para MESCLAR com o que outro usuário salvou
+// (as turmas criadas pelo colega não são tocadas) em vez de dar conflito.
 function aplicarOperacoes_(dados, operacoes) {
   if (!dados.turmas || typeof dados.turmas !== 'object') dados.turmas = {};
 
   for (var i = 0; i < operacoes.length; i++) {
     var op = operacoes[i];
-    if (!op || !op.op || !op.turmaId) continue;
+    if (!op || !op.op) continue;
+
+    if (op.op === 'caminho') {
+      definirCaminho_(dados, op.caminho, op.valor, op.remover === true);
+      continue;
+    }
+
+    if (!op.turmaId) continue;
     var turma = dados.turmas[op.turmaId];
     if (!turma) continue; // turma apagada por outra pessoa: ignora em vez de quebrar
 
@@ -267,6 +310,31 @@ function aplicarOperacoes_(dados, operacoes) {
       else turma.situacoesFinais[op.alunoId][op.disciplinaId] = String(op.valor);
     }
   }
+}
+
+// Define ou apaga um caminho completo dentro do objeto de dados.
+// Percorre criando os objetos que faltam; NÃO entra dentro de arrays
+// (no diff do app.js, arrays — alunos/disciplinas — são trocados inteiros).
+function definirCaminho_(obj, caminho, valor, remover) {
+  if (!obj || typeof obj !== 'object' || !caminho ||
+      Object.prototype.toString.call(caminho) !== '[object Array]' || !caminho.length) return false;
+  var alvo = obj;
+  for (var i = 0; i < caminho.length - 1; i++) {
+    var k = String(caminho[i]);
+    if (alvo === null || typeof alvo !== 'object' || Array.isArray(alvo)) return false;
+    if (alvo[k] === null || typeof alvo[k] !== 'object' || Array.isArray(alvo[k])) {
+      if (remover) return false; // não existe o que atravessar
+      alvo[k] = {};
+    }
+    alvo = alvo[k];
+  }
+  var ultimo = String(caminho[caminho.length - 1]);
+  if (remover) {
+    if (alvo && typeof alvo === 'object' && !Array.isArray(alvo)) delete alvo[ultimo];
+  } else {
+    alvo[ultimo] = valor;
+  }
+  return true;
 }
 
 // ===================== PLANILHA (banco de dados) =====================
@@ -837,10 +905,20 @@ mensagem exata do que falhou.
   Trocou a chave? Atualize a implantação (PARTE 6).
 
 Resposta "conflito: true"
-  Não é erro: outra pessoa salvou enquanto você editava. O app.js resolve sozinho
-  (carrega a versão nova e reaplica o que você digitou). Só exige refazer a
-  alteração quando foi uma mudança ESTRUTURAL (criar turma/disciplina/aluno) feita
-  por duas pessoas ao mesmo tempo.
+  Não é erro fatal: outra pessoa salvou enquanto você editava. O app.js resolve
+  sozinho — carrega a versão nova, reaplica por cima o que você digitou (notas,
+  conceitos, frequências E alterações de estrutura como turmas/disciplinas/alunos)
+  e reenvia automaticamente. Você só vê a mensagem de conflito de forma
+  intermitente enquanto isso acontece; em seguida ela vira "✅ Salvo na nuvem".
+  Se ela aparecer MUITAS vezes seguidas: duas pessoas (ou duas abas) estão
+  salvando ao mesmo tempo — o app para de tentar e mantém suas alterações
+  pendentes; faça uma nova edição qualquer para reenviar.
+
+O site mostra "O Apps Script da nuvem está DESATUALIZADO"
+  O app.js confere o número "script" devolvido pelo backend (precisa ser 2).
+  Atualize o Código.gs com o código da PARTE 2 e publique NOVA VERSÃO:
+  DEPLOY → Gerenciar implantações → ✏ → Versão: + Nova versão → IMPLANTAR
+  (mesma URL). Enquanto isso, turmas/disciplinas/alunos NÃO são gravados.
 
 "Erro ao salvar: O banco de dados está corrompido"
   Restaure um backup .json pela aba do administrador, ou apague a aba DADOS e
