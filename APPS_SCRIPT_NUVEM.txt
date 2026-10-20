@@ -1,0 +1,747 @@
+================================================================================
+  SISTEMA DE LANÇAMENTO DE NOTAS — GOOGLE APPS SCRIPT (BACKEND DA NUVEM)
+  Arquivo: APPS_SCRIPT_NUVEM.txt
+  Conteúdo: 1) código completo do script  |  2) como publicar na nuvem
+            3) como ligar o app (app.js)  |  4) backup SEMANAL automático no Drive
+            5) como atualizar sem perder a URL  |  6) limites e soluções de problemas
+================================================================================
+
+ÍNDICE
+  PARTE 1 — O QUE ESTE SCRIPT FAZ
+  PARTE 2 — CÓDIGO (cole no Código.gs)
+  PARTE 3 — COMO COLOCAR PARA RODAR NA NUVEM (passo a passo)
+  PARTE 4 — LIGANDO O SITE AO SCRIPT (app.js)
+  PARTE 5 — BACKUP SEMANAL AUTOMÁTICO NO GOOGLE DRIVE (1 JSON por semana)
+  PARTE 6 — COMO ATUALIZAR O SCRIPT SEM PERDER A URL
+  PARTE 7 — PLANO B: SE ALGO DER ERRADO
+  PARTE 8 — LIMITES / COTAS DO GOOGLE
+  PARTE 9 — SOLUÇÃO DE PROBLEMAS
+
+
+================================================================================
+PARTE 1 — O QUE ESTE SCRIPT FAZ
+================================================================================
+O site (index.html + app.js) é 100% estático: ele não tem servidor próprio.
+Este script É o servidor. Ele fica rodando "na nuvem" do Google e expõe uma URL
+(/exec) que o navegador chama para ler e gravar os dados.
+
+Ações que o site usa (já implementadas abaixo):
+
+  GET  .../exec?acao=ping&chave=XXX        → teste de conexão (botão "Testar Conexão")
+  GET  .../exec?acao=carregar&chave=XXX    → devolve { dados, versao } (estado inteiro)
+  POST .../exec  corpo { acao:'salvar', chave, versao, dados }         → salva tudo
+  POST .../exec  corpo { acao:'salvar', chave, versao, operacoes }     → salva só as
+             células alteradas (nota / conceito / frequência / situação)
+                                                                 ▲
+        Isso evita que a nota de um professor sobrescreva a do outro.
+
+Onde os dados ficam guardados?
+  → Numa planilha do Google Sheets chamada "BD - Sistema de Notas (Apps Script)",
+    criada AUTOMATICAMENTE na primeira execução. O JSON é guardado fatiado em
+    linhas (a planilha tem limite de 50.000 caracteres por célula; usamos 40.000).
+  → A "versão" (número) também fica na planilha. Ela serve para detectar CONFLITO:
+    se duas pessoas salvam ao mesmo tempo, o script devolve { conflito:true } e o
+    app carrega os dados mais recentes e reaplica as alterações por cima
+    (tudo isso já está no app.js).
+
+Segurança:
+  → Toda chamada precisa da CHAVE_SECRETA. Sem a chave, o script responde erro.
+  → Ninguém "edita" a planilha pela URL: a URL só executa as 3 ações acima.
+
+Backup semanal (a parte que você pediu):
+  → Um DISPARADOR (trigger) de 7 em 7 dias executa a função backupSemanalNoDrive(),
+    que baixa o JSON completo dos dados e grava um arquivo
+    "backup-notas-AAAA-MM-DD.json" dentro da pasta do Drive
+    "Backups - Sistema de Notas (JSON)". Mantém os últimos 12 backups e apaga os
+    mais velhos. O formato é EXATAMENTE o que o botão "Restaurar backup (.json)"
+    do app entende, ou seja: dá pra restaurar direto do Drive pela aba Admin.
+
+
+================================================================================
+PARTE 2 — CÓDIGO (cole inteiro no arquivo Código.gs)
+================================================================================
+Abra https://script.google.com → Novo projeto → apague tudo que tiver em
+"Código.gs" → cole o bloco abaixo → salve (Ctrl+S).
+
+--------------------------------------------------------------------------------
+/* ==========================================================================
+   SISTEMA DE LANÇAMENTO DE NOTAS — BACKEND NO GOOGLE APPS SCRIPT
+   --------------------------------------------------------------------------
+   O que ele faz:
+     1) doGet  → acao=ping / acao=carregar  (leitura dos dados na nuvem)
+     2) doPost → acao=salvar                (gravação, com controle de versão
+                                             e resolução automática de conflito)
+     3) backupSemanalNoDrive()              (1 JSON por semana na pasta do Drive)
+     4) setup() / criarDisparadorSemanal()  (instalação em 1 clique)
+   --------------------------------------------------------------------------
+   ESTRUTURA DA PLANILHA "DADOS" (criada sozinha; NÃO edite à mão):
+     A1 versao        | B1 <número da versão>
+     A2 atualizadoEm  | B2 <data ISO>
+     A3 fragmentos    | B3 <quantidade de linhas de JSON>
+     A4 indice        | B4 fragmento        (cabeçalho)
+     A5 1             | B5 <1º pedaço do JSON>
+     A6 2             | B6 <2º pedaço do JSON> ...
+   ========================================================================== */
+
+// ===================== CONFIGURAÇÃO =====================
+// DEVE ser idêntica à constante APPS_CHAVE_SECRETA do app.js
+var CHAVE_SECRETA = 'sn_CKmB5M38WP2zbeGTSOgfqcUYLJxakwrA';
+
+var NOME_BANCO        = 'BD - Sistema de Notas (Apps Script)';   // planilha de dados
+var NOME_PASTA_BACKUP = 'Backups - Sistema de Notas (JSON)';     // pasta do Drive (backups semanais)
+var ABA_DADOS         = 'DADOS';
+var TAM_FRAGMENTO     = 40000;   // caracteres por célula (limite do Sheets = 50.000)
+var MAX_BACKUPS       = 12;      // quantos arquivos .json manter na pasta (≈ 3 meses)
+var HORA_BACKUP       = 6;       // hora (0-23) do backup semanal, fuso do script
+
+var PROP_SS    = 'SPREADSHEET_ID';
+var PROP_PASTA = 'PASTA_BACKUP_ID';
+
+// ===================== RESPOSTA PADRÃO (JSON) =====================
+function json_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Responde ao pré-flight CORS do navegador (o site roda em outro domínio).
+// Hoje o app envia Content-Type text/plain, que já dispensa preflight, mas
+// deixamos aqui por segurança.
+function doOptions() {
+  try {
+    var out = json_({ ok: true });
+    out.addHeader('Access-Control-Allow-Origin', '*');
+    out.addHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    out.addHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return out;
+  } catch (e) {
+    return ContentService.createTextOutput('').setMimeType(ContentService.MimeType.TEXT);
+  }
+}
+
+// ===================== LEITURA (doGet) =====================
+function doGet(e) {
+  try {
+    var p = (e && e.parameter) ? e.parameter : {};
+    var acao = String(p.acao || '');
+    var chave = String(p.chave || '');
+
+    if (chave !== CHAVE_SECRETA) {
+      return json_({ ok: false, mensagem: 'Chave secreta incorreta. Confira CHAVE_SECRETA (aqui) e APPS_CHAVE_SECRETA (no app.js) — as duas precisam ser iguais.' });
+    }
+
+    if (acao === 'ping') {
+      var info = lerBanco_();
+      return json_({
+        ok: true,
+        pong: true,
+        projeto: 'sistema-notas-turmas',
+        versao: info.versao,
+        temDados: !!info.dados,
+        atualizadoEm: info.atualizadoEm,
+        backupSemanalAtivo: temDisparador_(),
+        mensagem: 'Conexão OK com o Apps Script.'
+      });
+    }
+
+    if (acao === 'carregar') {
+      var atual = lerBanco_();
+      // ok:true + dados:null = "nuvem ainda vazia" (o app mostra "Nenhum dado na nuvem ainda.")
+      return json_({ ok: true, dados: atual.dados || null, versao: atual.versao });
+    }
+
+    return json_({ ok: false, mensagem: 'Ação desconhecida: ' + acao });
+  } catch (err) {
+    return json_({ ok: false, mensagem: 'Erro ao ler os dados: ' + err.message });
+  }
+}
+
+// ===================== GRAVAÇÃO (doPost) =====================
+function doPost(e) {
+  // LockService: garante que 2 pessoas salvando no MESMO segundo não corrompam
+  // o banco (um espera o outro terminar).
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000); // espera até 20 s
+  } catch (erro) {
+    return json_({ ok: false, mensagem: 'Servidor ocupado (outro salvamento em andamento). Tente de novo em instantes.' });
+  }
+
+  try {
+    var corpo = {};
+    try {
+      corpo = JSON.parse(e.postData.contents);
+    } catch (erro) {
+      return json_({ ok: false, mensagem: 'Corpo da requisição não é um JSON válido.' });
+    }
+
+    var chave = String(corpo.chave || (e.parameter ? e.parameter.chave : '') || '');
+    if (chave !== CHAVE_SECRETA) {
+      return json_({ ok: false, mensagem: 'Chave secreta incorreta. Confira CHAVE_SECRETA (aqui) e APPS_CHAVE_SECRETA (no app.js).' });
+    }
+    if (corpo.acao !== 'salvar') {
+      return json_({ ok: false, mensagem: 'Ação desconhecida: ' + corpo.acao });
+    }
+
+    var info = lerBanco_();
+    var versaoCliente = Number(corpo.versao || 0);
+    if (!isFinite(versaoCliente)) versaoCliente = 0;
+    var versaoServidor = info.versao;
+    var dadosServidor = info.dados || { turmas: {} };
+
+    // ---- CONFLITO: outro usuário gravou depois que este navegador leu ----
+    if (versaoCliente !== versaoServidor) {
+      return json_({
+        conflito: true,
+        versao: versaoServidor,
+        dados: dadosServidor,
+        mensagem: 'Os dados da nuvem estão mais novos que a sua cópia local.'
+      });
+    }
+
+    var novosDados = null;
+    var operacoes = (corpo.operacoes && Object.prototype.toString.call(corpo.operacoes) === '[object Array]')
+      ? corpo.operacoes : null;
+
+    if (operacoes) {
+      // Incremental: só o que o usuário digitou (protege notas de colegas)
+      novosDados = JSON.parse(JSON.stringify(dadosServidor));
+      aplicarOperacoes_(novosDados, operacoes);
+    } else if (corpo.dados && typeof corpo.dados === 'object') {
+      // Completo: estrutura nova (turmas/disciplinas/alunos) ou 1º sincronismo
+      novosDados = JSON.parse(JSON.stringify(corpor.dados));
+      if (!novosDados.turmas || typeof novosDados.turmas !== 'object') novosDados.turmas = {};
+    } else {
+      return json_({ ok: false, mensagem: 'Requisição sem "dados" e sem "operacoes".' });
+    }
+
+    var novaVersao = versaoServidor + 1;
+    gravarBanco_(novaVersao, novosDados);
+
+    return json_({ ok: true, versao: novaVersao, gravadoEm: new Date().toISOString() });
+  } catch (err) {
+    return json_({ ok: false, mensagem: 'Erro ao salvar: ' + err.message });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Aplica no servidor as mesmas operações que o app.js aplica no navegador:
+// op = { op:'nota'|'conceito'|'frequencia'|'situacao', turmaId, disciplinaId,
+//        alunoId, bimestre, valor }
+function aplicarOperacoes_(dados, operacoes) {
+  if (!dados.turmas || typeof dados.turmas !== 'object') dados.turmas = {};
+
+  for (var i = 0; i < operacoes.length; i++) {
+    var op = operacoes[i];
+    if (!op || !op.op || !op.turmaId) continue;
+    var turma = dados.turmas[op.turmaId];
+    if (!turma) continue; // turma apagada por outra pessoa: ignora em vez de quebrar
+
+    if (!turma.notas) turma.notas = {};
+    if (!turma.frequencias) turma.frequencias = {};
+    var vazio = (op.valor === null || op.valor === undefined || op.valor === '');
+
+    if (op.op === 'nota') {
+      var b = op.bimestre;
+      if (!turma.notas[b]) turma.notas[b] = {};
+      if (!turma.notas[b][op.disciplinaId]) turma.notas[b][op.disciplinaId] = {};
+      if (vazio) delete turma.notas[b][op.disciplinaId][op.alunoId];
+      else turma.notas[b][op.disciplinaId][op.alunoId] = Number(op.valor);
+
+    } else if (op.op === 'conceito') {
+      if (!turma.conceitosFinais) turma.conceitosFinais = {};
+      if (!turma.conceitosFinais[op.alunoId]) turma.conceitosFinais[op.alunoId] = {};
+      if (vazio) delete turma.conceitosFinais[op.alunoId][op.disciplinaId];
+      else turma.conceitosFinais[op.alunoId][op.disciplinaId] = Number(op.valor);
+
+    } else if (op.op === 'frequencia') {
+      if (!turma.frequencias[op.bimestre]) turma.frequencias[op.bimestre] = {};
+      if (vazio) delete turma.frequencias[op.bimestre][op.alunoId];
+      else turma.frequencias[op.bimestre][op.alunoId] = Number(op.valor);
+
+    } else if (op.op === 'situacao') {
+      if (!turma.situacoesFinais) turma.situacoesFinais = {};
+      if (!turma.situacoesFinais[op.alunoId]) turma.situacoesFinais[op.alunoId] = {};
+      if (vazio) delete turma.situacoesFinais[op.alunoId][op.disciplinaId];
+      else turma.situacoesFinais[op.alunoId][op.disciplinaId] = String(op.valor);
+    }
+  }
+}
+
+// ===================== PLANILHA (banco de dados) =====================
+function obterOuCriarBanco_() {
+  var id = PropertiesService.getScriptProperties().getProperty(PROP_SS);
+  if (id) {
+    try {
+      SpreadsheetApp.openById(id); // confere se ainda existe
+      return id;
+    } catch (e) {
+      PropertiesService.getScriptProperties().deleteProperty(PROP_SS); // apagada: recria
+    }
+  }
+  var novo = SpreadsheetApp.create(NOME_BANCO);
+  PropertiesService.getScriptProperties().setProperty(PROP_SS, novo.getId());
+  var sh = novo.getSheets()[0];
+  sh.setName(ABA_DADOS);
+  Logger.log('Planilha criada: ' + novo.getUrl());
+  return novo.getId();
+}
+
+function lerBanco_() {
+  var id = obterOuCriarBanco_();
+  var sh = SpreadsheetApp.openById(id).getSheetByName(ABA_DADOS);
+  if (!sh) return { versao: 0, dados: null, atualizadoEm: null };
+
+  var versao = Number(sh.getRange(1, 2).getValue());
+  if (!isFinite(versao)) versao = 0;
+  var atualizadoEm = sh.getRange(2, 2).getValue();
+  var fragmentos = Number(sh.getRange(3, 2).getValue());
+  if (!isFinite(fragmentos) || fragmentos <= 0) {
+    return { versao: versao, dados: null, atualizadoEm: atualizadoEm };
+  }
+
+  var bruto = sh.getRange(5, 2, fragmentos, 1).getDisplayValues();
+  var texto = '';
+  for (var i = 0; i < bruto.length; i++) texto += String(bruto[i][0] === null ? '' : bruto[i][0]);
+
+  if (!texto) return { versao: versao, dados: null, atualizadoEm: atualizadoEm };
+
+  try {
+    return { versao: versao, dados: JSON.parse(texto), atualizadoEm: atualizadoEm };
+  } catch (e) {
+    throw new Error('O banco de dados está corrompido (JSON inválido na planilha). Restaure um backup .json pela aba do administrador.');
+  }
+}
+
+function gravarBanco_(versao, dados) {
+  var id = obterOuCriarBanco_();
+  var ss = SpreadsheetApp.openById(id);
+  var sh = ss.getSheetByName(ABA_DADOS) || ss.insertSheet(ABA_DADOS);
+
+  var json = JSON.stringify(dados);
+  var fragmentos = [];
+  for (var i = 0; i < json.length; i += TAM_FRAGMENTO) {
+    fragmentos.push(json.substring(i, i + TAM_FRAGMENTO));
+  }
+
+  var linhas = [];
+  linhas.push(['versao', versao]);
+  linhas.push(['atualizadoEm', new Date().toISOString()]);
+  linhas.push(['fragmentos', fragmentos.length]);
+  linhas.push(['indice', 'fragmento']);       // cabeçalho (linha 4)
+  for (var j = 0; j < fragmentos.length; j++) linhas.push([j + 1, fragmentos[j]]);
+
+  sh.clear(); // remove conteúdo e formatação antigas (evita "linhas fantasma")
+  sh.getRange(1, 1, linhas.length, 2).setValues(linhas);
+  sh.getRange(5, 2, Math.max(fragmentos.length, 1), 1).setNumberFormat('@'); // texto puro
+  sh.getRange(1, 4).setValue('NÃO EDITE ESTA ABA. Os fragmentos do JSON começam na linha 5, coluna B. Apague só a planilha inteira se quiser zerar o banco.');
+}
+
+// ===================== BACKUP SEMANAL NO GOOGLE DRIVE =====================
+// Roda sozinha (disparador de 7 em 7 dias) ou manualmente pela lista de funções.
+// Gera: Backups - Sistema de Notas (JSON)/backup-notas-AAAA-MM-DD.json
+function backupSemanalNoDrive() {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (e) {
+    Logger.log('Backup pulado: banco ocupado.');
+    return 'Backup pulado: banco ocupado no momento.';
+  }
+
+  try {
+    var info = lerBanco_();
+    if (!info.dados) {
+      Logger.log('Backup semanal: ainda não há dados na nuvem, nada foi gerado.');
+      return 'Ainda não há dados na nuvem — nenhum backup foi gerado.';
+    }
+
+    var pasta = obterOuCriarPasta_();
+
+    // Mesmo envelope do botão "Baixar backup (.json)" do app → dá pra restaurar direto
+    var conteudo = JSON.stringify({
+      aplicativo: 'sistema-notas-turmas',
+      tipo: 'backup',
+      versao: 1,
+      geradoEm: new Date().toISOString(),
+      origem: 'backup automático semanal — Google Apps Script (Google Drive)',
+      dados: info.dados
+    }, null, 2);
+
+    var hoje = new Date().toISOString().slice(0, 10);           // AAAA-MM-DD
+    var nome = 'backup-notas-' + hoje + '.json';
+
+    // Se já existe arquivo com esse nome hoje (teste manual repetido), apaga e recria
+    var existentes = pasta.getFilesByName(nome);
+    while (existentes.hasNext()) existentes.next().setTrashed(true);
+
+    var arquivo = pasta.createFile(nome, conteudo);
+    var apagados = limparBackupsAntigos_(pasta);
+    var total = contarBackups_(pasta);
+
+    Logger.log('Backup gerado: ' + arquivo.getName() + ' | ' + arquivo.getUrl());
+    return 'OK: ' + arquivo.getName() + ' → ' + arquivo.getUrl() +
+           ' (total na pasta: ' + total + ', apagados por excesso: ' + apagados + ')';
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function obterOuCriarPasta_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty(PROP_PASTA);
+  if (id) {
+    try {
+      var pasta = DriveApp.getFolderById(id);
+      return pasta;
+    } catch (e) {
+      props.deleteProperty(PROP_PASTA);
+    }
+  }
+  // Procura pela pasta já existente (evita duplicar se você rodar setup 2 vezes)
+  var achadas = DriveApp.getFoldersByName(NOME_PASTA_BACKUP);
+  if (achadas.hasNext()) {
+    var p = achadas.next();
+    props.setProperty(PROP_PASTA, p.getId());
+    return p;
+  }
+  var nova = DriveApp.createFolder(NOME_PASTA_BACKUP);
+  props.setProperty(PROP_PASTA, nova.getId());
+  Logger.log('Pasta de backups criada: ' + nova.getUrl());
+  return nova;
+}
+
+function contarBackups_(pasta) {
+  var n = 0;
+  var it = pasta.getFiles();
+  while (it.hasNext()) {
+    if (/^backup-notas-.*\.json$/i.test(it.next().getName())) n++;
+  }
+  return n;
+}
+
+// Mantém apenas os MAX_BACKUPS mais recentes (nomes com data AAAA-MM-DD
+// já saem em ordem cronológica se ordenados de trás pra frente).
+function limparBackupsAntigos_(pasta) {
+  var lista = [];
+  var it = pasta.getFiles();
+  while (it.hasNext()) {
+    var f = it.next();
+    if (/^backup-notas-.*\.json$/i.test(f.getName())) lista.push(f);
+  }
+  lista.sort(function (a, b) { return b.getName().localeCompare(a.getName()); });
+  var apagados = 0;
+  for (var i = MAX_BACKUPS; i < lista.length; i++) {
+    lista[i].setTrashed(true);
+    apagados++;
+  }
+  return apagados;
+}
+
+// ===================== INSTALAÇÃO / DISPARADOR SEMANAL =====================
+// Rode UMA vez (função "setup") → autoriza e cria tudo.
+function setup() {
+  var id = obterOuCriarBanco_();
+  var pasta = obterOuCriarPasta_();
+
+  Logger.log('1) Planilha de dados: ' + SpreadsheetApp.openById(id).getUrl());
+  Logger.log('2) Pasta de backups semanais: ' + pasta.getUrl());
+  Logger.log('3) ' + criarDisparadorSemanal());
+  Logger.log('4) ' + backupSemanalNoDrive());  // 1º backup imediato, para você já conferir
+
+  return 'Setup concluído - veja as URLs no painel Registro / Executions.';
+}
+
+// Cria o disparador: a cada 7 dias, à HORA_BACKUP (padrão 06:00).
+// Pode ser rodada quantas vezes quiser: nunca duplica o disparador.
+function criarDisparadorSemanal() {
+  var existentes = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < existentes.length; i++) {
+    if (existentes[i].getHandlerFunction() === 'backupSemanalNoDrive') {
+      return 'Disparador semanal já estava criado (nada foi duplicado).';
+    }
+  }
+  ScriptApp.newTrigger('backupSemanalNoDrive')
+    .timeBased()
+    .everyWeeks(1)          // a cada 1 semana
+    .atHour(HORA_BACKUP)    // às 06:00
+    .atMinute(0)
+    .create();
+  return 'Disparador semanal CRIADO: toda semana, ' + HORA_BACKUP + 'h00 (fuso do script).';
+}
+
+function removerDisparadorSemanal() {
+  var existentes = ScriptApp.getProjectTriggers();
+  var n = 0;
+  for (var i = 0; i < existentes.length; i++) {
+    if (existentes[i].getHandlerFunction() === 'backupSemanalNoDrive') {
+      ScriptApp.deleteTrigger(existentes[i]);
+      n++;
+    }
+  }
+  return n ? (n + ' disparador(es) apagado(s).') : 'Nenhum disparador encontrado.';
+}
+
+function temDisparador_() {
+  var existentes = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < existentes.length; i++) {
+    if (existentes[i].getHandlerFunction() === 'backupSemanalNoDrive') return true;
+  }
+  return false;
+}
+
+// Diagnóstico: rode para conferir se TUDO está de pé.
+function statusDoSistema() {
+  var info;
+  try { info = lerBanco_(); } catch (e) { info = { erro: e.message }; }
+  Logger.log('Planilha...: ' + (PropertiesService.getScriptProperties().getProperty(PROP_SS) || 'não criada'));
+  Logger.log('Pasta......: ' + (PropertiesService.getScriptProperties().getProperty(PROP_PASTA) || 'não criada'));
+  Logger.log('Versão.....: ' + (info.versao !== undefined ? info.versao : info.erro));
+  Logger.log('Tem dados..: ' + (info.dados ? 'sim (' + Object.keys(info.dados.turmas || {}).length + ' turmas)' : 'não'));
+  Logger.log('Disparador.: ' + (temDisparador_() ? 'semanal ATIVO' : 'DESLIGADO — rode criarDisparadorSemanal()'));
+  return 'Veja o registro ao lado (Registro / Executions).';
+}
+--------------------------------------------------------------------------------
+fim do código
+
+
+================================================================================
+PARTE 3 — COMO COLOCAR PARA RODAR NA NUVEM (passo a passo)
+================================================================================
+
+PASSO 1 — Criar o projeto
+  1. Abra https://script.google.com (ou Drive → Novo → Mais → Google Apps Script).
+  2. "+ Projeto" (ou Novo projeto) e dê um nome, ex.: "Notas - Backend".
+  3. Apague o conteúdo padrão de "Código.gs" e cole TODO o código da PARTE 2.
+  4. Ctrl+S para salvar.
+
+PASSO 2 — Autorizar (aparece 1 vez só)
+  1. No seletor de funções (barra superior, ao lado de "Executar"), escolha "setup".
+  2. Clique em ▶ Executar.
+  3. Google abre a tela "Este app não foi verificado":
+       → clique em  AVANÇADO  →  "Ir para o projeto (inseguro)"  →  Permitir.
+     (Aviso "não verificado" é NORMAL: é um projeto pessoal, sem revisão do Google.)
+  4. Dê permissão à sua conta. Autorizações pedidas: Drive (planilha + pasta de
+     backup), planilhas, e gatilhos/disparadores. Não pede dinheiro nem acesso a
+     e-mail.
+  5. Ao terminar, o "Registro" (painel lateral "Registro" ou "Executions") mostra:
+        1) Planilha de dados: https://docs.google.com/spreadsheets/d/... ← SALVE
+        2) Pasta de backups semanais: https://drive.google.com/drive/folders/... ← SALVE
+        3) Disparador semanal CRIADO ...
+        4) OK: backup-notas-AAAA-MM-DD.json → ...
+     → Ou seja: o setup já criou a planilha, a pasta e LIGOU o backup semanal,
+       além de gerar o primeiro backup na hora para você conferir.
+
+  ⚙️  Configure o fuso horário: Configurações do projeto (engrenagem, canto
+      superior) → Fuso horário → América/São_Paulo. (Senão o backup semanal
+      dispara na hora errada.)
+
+PASSO 3 — Publicar como Aplicativo da Web
+  1. Botão  DEPLOY  (canto superior) →  + Nova implantação  (New deployment).
+  2. Ao lado do lápis, escolha o tipo:  ⚙ Aplicativo da Web (Web app).
+  3. Preencha:
+        Descrição.........: Notas v1
+        Executar como.....:  EU  (minha conta)   ← precisa ser "Eu" para os
+                                                    disparadores semanais rodarem
+        Quem tem acesso...:  QUALQUER PESSOA     ← senão o site não consegue ler
+  4. Clique em  IMPLANTAR (Deploy)  → autorize de novo se pedir.
+  5. Copie a URL que termina em  /exec :
+        https://script.google.com/macros/s/AKfycb.../exec
+     É essa URL que vai para o site.
+
+  ⚠️ IMPORTANTE:
+     • URL errada é a causa nº 1 de falha. Tem que ser a de APLICATIVO DA WEB
+       terminando em /exec — NÃO use o /dev e NÃO use o link do editor.
+     • Se aparecer "não verificado" de novo, é só AVANÇADO → Ir → Permitir.
+
+PASSO 4 — Testar
+  • No editor: funções "statusDoSistema" e "backupSemanalNoDrive" → Executar.
+  • Navegador: veja PARTE 4 (botão "Testar Conexão").
+  • Se a planilha "BD - Sistema de Notas (Apps Script)" não existir no Drive,
+    rode "setup" de novo — ele só cria o que falta.
+
+
+================================================================================
+PARTE 4 — LIGANDO O SITE AO SCRIPT (app.js)
+================================================================================
+Abra app.js e ajuste as DUAS constantes do topo (linhas 6-7):
+
+    const APPS_URL_PADRAO = 'https://script.google.com/macros/s/AKfycb.../exec';
+    const APPS_CHAVE_SECRETA = 'sn_CKmB5M38WP2zbeGTSOgfqcUYLJxakwrA';
+
+  • APPS_URL_PADRAO      → cole a URL /exec que você copiou no PASSO 3.
+  • APPS_CHAVE_SECRETA   → já está igual à CHAVE_SECRETA do script. Se você trocar
+                           uma, troque NAS DUAS (app.js e Código.gs).
+
+(Opcional: quem não quiser editar o código pode colar a URL no site, na aba
+Administrador → ☁️ Backup na Nuvem → "URL do Apps Script" → Salvar URL.)
+
+Teste no site:
+  1. Abra index.html (pelo GitHub Pages, Railway ou até localmente).
+  2. 👑 Administrador → senha admin123 → aba Admin → seção ☁️ Backup na Nuvem.
+  3. Clique em  "Testar Conexão".
+        ✅ "Conexão OK — resposta do servidor: {ok:true, pong:true, ...}"
+              → tudo funcionando (confira que aparece "backupSemanalAtivo": true).
+        ❌ "Falha na conexão" → veja PARTE 9.
+  4. Crie uma turma. Espere ~1 segundo e recarregue a página:
+     se a turma continuar lá, os dados estão de fato NA NUVEM.
+  5. Para conferir, abra a planilha "BD - Sistema de Notas (Apps Script)" no Drive:
+     a aba DADOS deve mostrar a versão e as linhas de JSON.
+
+
+================================================================================
+PARTE 5 — BACKUP SEMANAL AUTOMÁTICO NO GOOGLE DRIVE (o que você pediu)
+================================================================================
+O que foi implementado:
+  • Disparador (trigger) instalável:  a cada 7 dias, às 06:00  roda
+    backupSemanalNoDrive().
+  • Ele lê o JSON completo do banco e GRAVA na pasta do Drive
+        "Backups - Sistema de Notas (JSON)"
+    um arquivo:
+        backup-notas-2026-10-20.json      (data = dia da execução)
+  • O arquivo guarda os últimos 12 backups (≈ 3 meses); os mais velhos vão para
+    a lixeira do Drive automaticamente.
+  • Rodar de novo no mesmo MESMO dia substitui o arquivo do dia (não acumula lixo).
+  • O formato é idêntico ao do botão "Baixar backup (.json)" do site → pode ser
+    restaurado pela aba Admin → 💾 Backup e Restauração → Restaurar backup (.json).
+
+Já está ligado?
+  • O setup() cria o disparador sozinho. Para conferir, rode a função
+    "statusDoSistema" → Disparador.: semanal ATIVO.
+  • Ou veja no editor: painel esquerdo  ⏰ Acionadores (Triggers) → deve aparecer
+    "backupSemanalNoDrive | Depois de 7 dias (06h00)".
+
+Criar manualmente / religar:
+  • No editor, selecione a função  criarDisparadorSemanal  → ▶ Executar.
+    (É idempotente: se já existir, não duplica.)
+  • Semana errada, hora errada? Edite HORA_BACKUP no topo do script e, se quiser
+    outro dia da semana, troque .everyWeeks(1) por uma versão com
+    .onDayOfWeek(...) — ou simplesmente mantenha: a cada 7 dias é exatamente o
+    que foi pedido.
+
+Testar AGORA sem esperar a semana:
+  • Selecione a função  backupSemanalNoDrive  → ▶ Executar.
+  • Ou rode  setup()  (ele cria o que falta e já gera o 1º backup).
+  • Depois abra o Drive → pasta "Backups - Sistema de Notas (JSON)" → baixe o
+    .json e veja se tem "dados" → "turmas" lá dentro.
+
+Receber no e-mail também? (opcional, 5 linhas)
+  No mesmo script, crie uma função e ligue um disparador semanal nela:
+    function backupPorE-mail() {
+      var arq = DriveApp.getFolderById(PropertiesService.getScriptProperties()
+                 .getProperty(PROP_PASTA)).getFilesByName('backup-notas-' +
+                 new Date().toISOString().slice(0,10) + '.json');
+      if (arq.hasNext()) {
+        MailApp.sendEmail('seuemail@gmail.com', 'Backup semanal do Sistema de Notas',
+          'Segue o backup do dia. Baixe e guarde.', { attachments: [arq.next()] });
+      }
+    }
+
+Desligar o backup semanal:
+  • Função  removerDisparadorSemanal  → ▶ Executar.
+  • Ou no painel ⏰ Acionadores → lixeira ao lado do acionador.
+  • A pasta do Drive e os arquivos já gerados continuam lá.
+
+
+================================================================================
+PARTE 6 — COMO ATUALIZAR O SCRIPT SEM PERDER A URL /exec
+================================================================================
+Se você criar uma NOVA implantação, sai uma URL NOVA — e o site antigo fica
+preso na versão velha do script (o problema clássico).
+
+Caminho certo (mantém a MESMA URL):
+  1. Edite o Código.gs e salve.
+  2.  DEPLOY  →  Gerenciar implantações (Manage deployments).
+  3. Lápis ✏ ao lado da implantação existente.
+  4. Em "Versão" escolha  + Nova versão  (New version).
+  5.  IMPLANTAR.
+  6. A URL não muda. Pronto.
+
+Caminho alternativo (URL nova):
+  DEPLOY → + Nova implantação → copie a URL nova → cole no app.js → publique o
+  site de novo. Só faça isso se de fato quiser trocar a URL.
+
+Se a URL sumir do painel: procure em  DEPLOY → Gerenciar implantações → ícone
+de filtro ⚙ → marque "Implantações selecionadas"/"Todas".
+
+
+================================================================================
+PARTE 7 — PLANO B: SE ALGO DER ERRADO
+================================================================================
+• Backup automático semanal → sempre tem um .json na pasta do Drive.
+• Backup manual → aba Admin → "Baixar backup (.json)" (baixa DIRETO da nuvem).
+• Restaurar → aba Admin → "Restaurar backup (.json)" → escolha o arquivo baixado
+  → confirme → os dados voltam para a nuvem.
+• Também dá pra zerar o banco: abra a planilha "BD - Sistema de Notas",
+  apague a aba DADOS inteira (ou só a aba, deixando a planilha) e rode
+  "statusDoSistema" — ele recria sozinho com versão 0 e sem dados.
+• Guarde a pasta de backups compartilhada com outra conta, para não depender
+  de um único login.
+
+
+================================================================================
+PARTE 8 — LIMITES / COTAS DO GOOGLE (são folgados para este app)
+================================================================================
+• 6 minutos por execução            → cada salvamento leva < 1 s.
+• Gatilhos (disparadores): até 20 por conta e ~90 min/dia de execução.
+  Usamos 1, rodando 1x por semana por segundos.
+• Drive: milhares de arquivos criados por dia → geramos 1/semana.
+• Planilha: ~50 operações de leitura/escrita por minuto. Cada salvamento faz
+  1 leitura + 1 escrita; o app já agrupa alterações (debounce de 400 ms) e só
+  manda a célula alterada.
+• Célula: 50.000 caracteres → usamos fatias de 40.000. Mesmo com MUITOS alunos,
+  cabem centenas de megabytes de JSON antes de qualquer limite prático.
+• Execuções simultâneas: o LockService serializa (um espera o outro, sem erro).
+• Se a conta for Google Workspace de escola, o administrador pode bloquear
+  scripts de terceiros/disparadores → nesse caso publique com uma conta pessoal
+  (@gmail.com).
+
+
+================================================================================
+PARTE 9 — SOLUÇÃO DE PROBLEMAS
+================================================================================
+"Sfalha na conexão" / "Failed to fetch"
+  1. URL é a de APLICATIVO DA WEB e termina em /exec? (não /dev, não link do editor)
+  2. Deploy → "Quem tem acesso" = Qualquer pessoa?
+  3. Você salvou o código DEPOIS do deploy? Se sim, atualize a implantação
+     (PARTE 6) — senão a URL antiga continua rodando o código antigo.
+  4. Abra a URL /exec direto no navegador: tem que vir JSON. Se vier HTML de
+     erro de autorização → refaça o deploy e autorize.
+  5. Teste "Testar Conexão" de novo.
+
+"Chave secreta incorreta"
+  CHAVE_SECRETA (Código.gs) ≠ APPS_CHAVE_SECRETA (app.js). Iguale as duas.
+  Trocou a chave? Atualize a implantação (PARTE 6).
+
+Resposta "conflito: true"
+  Não é erro: outra pessoa salvou enquanto você editava. O app.js resolve sozinho
+  (carrega a versão nova e reaplica o que você digitou). Só exige refazer a
+  alteração quando foi uma mudança ESTRUTURAL (criar turma/disciplina/aluno) feita
+  por duas pessoas ao mesmo tempo.
+
+"Erro ao salvar: O banco de dados está corrompido"
+  Restaure um backup .json pela aba do administrador, ou apague a aba DADOS e
+  rode statusDoSistema.
+
+O backup semanal NÃO apareceu no Drive
+  • ⏰ Acionadores existe com backupSemanalNoDrive? Se não → criarDisparadorSemanal().
+  • Rode statusDoSistema: "Disparador.: semanal ATIVO"?
+  • Veja o erro: editor → painel  🔎 Executions/Registro → clique na execução
+    vermelha para ver a mensagem.
+  • Se a conta tiver 2 etapas, o Google às vezes pede revalidação de gatilhos:
+    acione o ⚠ do painel Acionadores → revisar/permissão.
+  • Timezone do script ≠ America/Sao_Paulo → troque nas Configurações do projeto.
+
+"Pasta criada em outro lugar"
+  A pasta nasce na raiz do Drive de quem executou o setup. Mova para onde quiser
+  (o script guarda o ID e continua achando). Não renomeie nem apague: se apagar,
+  rode setup() de novo que ele cria outra.
+
+Dica final
+  Deixe aberto na aba do editor:  ⏰ Acionadores  e  🔎 Executions. É ali que
+  você vê o backup semanal rodando de verdade, semana após semana.
+
+================================================================================
+                                FIM DO GUIA
+================================================================================
