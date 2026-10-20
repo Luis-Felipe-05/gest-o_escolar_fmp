@@ -3,7 +3,7 @@
     // Assim NINGUÉM precisa configurar nada no computador de cada pessoa:
     // qualquer um que abrir a página já busca e salva os dados na nuvem.
     // A CHAVE deve ser idêntica à CHAVE_SECRETA definida no script do Apps Script.
-    const APPS_URL_PADRAO = 'https://script.google.com/macros/s/AKfycbyHPakdko0MYCQI6ui5llJIqCDBk9OxpNku6gLUxwGsuqSsW_U60ehWnkCZwZak5EIIFA/exec'; // ex.: https://script.google.com/macros/s/XXXX/exec
+    const APPS_URL_PADRAO = 'https://script.google.com/macros/s/AKfycbwb2dJmD6DcF6Kx3IYUkX2FWT_tQ78XVFGspwrxFgSqvtzrXUs7HNuKxxU7eiXRmx9RzA/exec'; // ex.: https://script.google.com/macros/s/XXXX/exec
     const APPS_CHAVE_SECRETA = 'sn_CKmB5M38WP2zbeGTSOgfqcUYLJxakwrA';
 
     // ====================== SEGURANÇA ======================
