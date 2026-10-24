@@ -373,6 +373,12 @@
       cursor: not-allowed;
     }
 
+    .nota-vazia {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 5px 10px;
+    }
+
     .admin-notas-table th.disc-col {
       min-width: 320px;
     }

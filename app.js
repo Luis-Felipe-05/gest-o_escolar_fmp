@@ -1745,12 +1745,14 @@
         return;
       }
 
+      // Professor vê TODAS as disciplinas da turma, mas só edita as suas
       let disciplinasVisiveis = turma.disciplinas;
+      let discIdsProfessor = [];
       if (perfilAtual === 'professor' && professorLogado) {
-        const discIdsProfessor = getDisciplinasProfessor()
+        discIdsProfessor = getDisciplinasProfessor()
           .filter(d => d.turmaId === turmaId)
           .map(d => d.discId);
-        disciplinasVisiveis = turma.disciplinas.filter(d => discIdsProfessor.includes(d.id));
+        // NÃO filtra disciplinasVisiveis — professor vê todas
       }
 
       if (perfilAtual === 'admin') {
@@ -1821,14 +1823,17 @@
             <tr>
               <th class="aluno-hdr">Aluno</th>
               ${disciplinasVisiveis.map(d => {
+          const isMinhaDisciplina = discIdsProfessor.includes(d.id);
           return `
                   <th class="disc-col">
                     <div class="disc-header-info">
                       <strong>${esc(d.nome)}</strong>
                       <small>Prof: ${esc(d.professor)}</small>
-                      <div class="logado-badge">
-                        &#10003; Logado: ${esc(d.professor)}
-                      </div>
+                      ${perfilAtual === 'professor' && professorLogado && isMinhaDisciplina ? `
+                        <div class="logado-badge">
+                          &#10003; Logado: ${esc(d.professor)}
+                        </div>
+                      ` : ''}
                     </div>
                   </th>
                 `;
@@ -1842,16 +1847,27 @@
                 <td class="aluno-cell">${esc(aluno.nome)}</td>
                 ${disciplinasVisiveis.map(d => {
           const nota = notasBim[d.id]?.[aluno.id];
-          if (professorLogado) {
-            return `
-                      <td>
-                        <input type="number" class="nota-input" min="0" max="10" step="1"
-                          value="${nota !== undefined ? nota : ''}"
-                          placeholder="0-10"
-                          onchange="salvarNota('${turmaId}', '${d.id}', '${aluno.id}', this.value)">
-                      </td>
-                    `;
+          const isMinhaDisciplina = discIdsProfessor.includes(d.id);
+          if (perfilAtual === 'professor' && professorLogado) {
+            if (isMinhaDisciplina) {
+              // Disciplina do professor logado: input editável
+              return `
+                        <td>
+                          <input type="number" class="nota-input" min="0" max="10" step="1"
+                            value="${nota !== undefined ? nota : ''}"
+                            placeholder="0-10"
+                            onchange="salvarNota('${turmaId}', '${d.id}', '${aluno.id}', this.value)">
+                        </td>
+                      `;
+            } else {
+              // Disciplina de outro professor: nota visível mas travada (somente leitura)
+              if (nota !== undefined) {
+                return `<td><span class="nota-travada" title="Nota de outra disciplina — somente leitura">${Number(nota).toFixed(1)}</span></td>`;
+              }
+              return `<td><span class="nota-vazia">—</span></td>`;
+            }
           }
+          // Admin ou outros perfis
           if (nota !== undefined) {
             return `<td><span class="nota-travada" title="Nota visível mas travada">${Number(nota).toFixed(1)}</span></td>`;
           }
@@ -1932,12 +1948,14 @@
       }
 
       // Filtrar disciplinas conforme o perfil
+      // Professor vê TODAS as disciplinas da turma (somente leitura, já que 5º Conceito só admin edita)
       let disciplinasVisiveis = turma.disciplinas;
+      let discIdsProfessor = [];
       if (perfilAtual === 'professor' && professorLogado) {
-        const discIdsProfessor = getDisciplinasProfessor()
+        discIdsProfessor = getDisciplinasProfessor()
           .filter(d => d.turmaId === turmaId)
           .map(d => d.discId);
-        disciplinasVisiveis = turma.disciplinas.filter(d => discIdsProfessor.includes(d.id));
+        // NÃO filtra disciplinasVisiveis — professor vê todas (somente leitura)
       }
 
       const linhas = turma.alunos.map(aluno => {
@@ -1992,7 +2010,10 @@
         <thead>
           <tr>
             <th class="aluno-hdr"><div class="disc-header-info"><strong>Aluno</strong><small>Prof: Sala</small></div></th>
-            ${disciplinasVisiveis.map(d => `<th class="disc-col"><div class="disc-header-info"><strong>${esc(d.nome)}</strong><small>Prof: ${esc(d.professor)}</small></div></th>`).join('')}
+            ${disciplinasVisiveis.map(d => {
+              const isMinhaDisciplina = discIdsProfessor.includes(d.id);
+              return `<th class="disc-col"><div class="disc-header-info"><strong>${esc(d.nome)}</strong><small>Prof: ${esc(d.professor)}</small>${perfilAtual === 'professor' && professorLogado && isMinhaDisciplina ? `<div class="logado-badge">&#10003; Logado: ${esc(d.professor)}</div>` : ''}</div></th>`;
+            }).join('')}
             <th style="background:#1a237e;">Média Geral</th>
           </tr>
         </thead>
@@ -2018,7 +2039,10 @@
         <thead>
           <tr>
             <th class="aluno-hdr">Média da Sala por Bimestre</th>
-            ${disciplinasVisiveis.map(d => `<th class="disc-col"><div class="disc-header-info"><strong>${esc(d.nome)}</strong><small>Prof: ${esc(d.professor)}</small></div></th>`).join('')}
+            ${disciplinasVisiveis.map(d => {
+              const isMinhaDisciplina = discIdsProfessor.includes(d.id);
+              return `<th class="disc-col"><div class="disc-header-info"><strong>${esc(d.nome)}</strong><small>Prof: ${esc(d.professor)}</small>${perfilAtual === 'professor' && professorLogado && isMinhaDisciplina ? `<div class="logado-badge">&#10003; Logado: ${esc(d.professor)}</div>` : ''}</div></th>`;
+            }).join('')}
           </tr>
         </thead>
         <tbody>
@@ -2484,13 +2508,14 @@
       const turma = getTurma(turmaId);
       if (!turma) { container.innerHTML = '<div class="error-box">Turma não encontrada.</div>'; return; }
 
-      // ----- Professor: vê e edita APENAS as disciplinas dele nesta turma -----
+      // Professor vê TODAS as disciplinas da turma, mas só edita Situação Final das suas
       let disciplinasVisiveis = (turma.disciplinas || []);
+      let discIdsProfessor = [];
       if (perfilAtual === 'professor' && professorLogado) {
-        const discIdsProfessor = getDisciplinasProfessor()
+        discIdsProfessor = getDisciplinasProfessor()
           .filter(d => d.turmaId === turmaId)
           .map(d => d.discId);
-        disciplinasVisiveis = (turma.disciplinas || []).filter(d => discIdsProfessor.includes(d.id));
+        // NÃO filtra disciplinasVisiveis — professor vê todas
       }
 
       if (disciplinasVisiveis.length === 0 || turma.alunos.length === 0) {
@@ -2548,7 +2573,10 @@
         <thead>
           <tr>
             <th class="aluno-hdr" rowspan="2">Aluno</th>
-            ${disciplinasVisiveis.map(d => `<th class="disc-col" colspan="8" style="text-align:center;"><div class="disc-header-info"><strong>${esc(d.nome)}</strong><small>Prof: ${esc(d.professor)}</small></div></th>`).join('')}
+            ${disciplinasVisiveis.map(d => {
+              const isMinhaDisciplina = discIdsProfessor.includes(d.id);
+              return `<th class="disc-col" colspan="8" style="text-align:center;"><div class="disc-header-info"><strong>${esc(d.nome)}</strong><small>Prof: ${esc(d.professor)}</small>${perfilAtual === 'professor' && professorLogado && isMinhaDisciplina ? `<div class="logado-badge">&#10003; Logado: ${esc(d.professor)}</div>` : ''}</div></th>`;
+            }).join('')}
             <th rowspan="2" style="background:#1a237e; min-width:100px;">Média Geral</th>
           </tr>
           <tr>
@@ -2612,13 +2640,28 @@
                 <td class="${recCor}" style="font-size:11px; padding:4px;">${labelRecuperacao(recDisc)}</td>
                 <td style="font-size:11px; padding:4px; text-align:center;">${getFrequenciaMedia(turma, aluno.id)}</td>
                 <td>
-                  <select class="nota-input" style="width:140px; font-size:11px;" onchange="salvarSituacaoFinal('${turmaId}', '${aluno.id}', '${disc.id}', this.value)">
-                    <option value="">Selecione</option>
-                    <option value="aprovado_nota_freq" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'aprovado_nota_freq' ? 'selected' : ''}>Aprovado por nota e frequência</option>
-                    <option value="aprovado_conselho" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'aprovado_conselho' ? 'selected' : ''}>Aprovado pelo conselho</option>
-                    <option value="reprovado_nota" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'reprovado_nota' ? 'selected' : ''}>Reprovado por nota</option>
-                    <option value="reprovado_freq" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'reprovado_freq' ? 'selected' : ''}>Reprovado por frequência</option>
-                  </select>
+                  ${(() => {
+                    const isMinhaDisciplina = discIdsProfessor.includes(disc.id);
+                    if (perfilAtual === 'professor' && professorLogado && isMinhaDisciplina) {
+                      // Disciplina do professor: dropdown editável
+                      return `
+                        <select class="nota-input" style="width:140px; font-size:11px;" onchange="salvarSituacaoFinal('${turmaId}', '${aluno.id}', '${disc.id}', this.value)">
+                          <option value="">Selecione</option>
+                          <option value="aprovado_nota_freq" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'aprovado_nota_freq' ? 'selected' : ''}>Aprovado por nota e frequência</option>
+                          <option value="aprovado_conselho" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'aprovado_conselho' ? 'selected' : ''}>Aprovado pelo conselho</option>
+                          <option value="reprovado_nota" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'reprovado_nota' ? 'selected' : ''}>Reprovado por nota</option>
+                          <option value="reprovado_freq" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'reprovado_freq' ? 'selected' : ''}>Reprovado por frequência</option>
+                        </select>
+                      `;
+                    } else {
+                      // Outras disciplinas ou admin: somente leitura
+                      const sit = getSituacaoFinal(turma, aluno.id, disc.id);
+                      if (sit) {
+                        return `<span style="color:${corSituacaoFinal(sit)}; font-weight:700;">${labelSituacaoFinal(sit)}</span>`;
+                      }
+                      return '<span style="color:#999;">—</span>';
+                    }
+                  })()}
                 </td>
               `;
         }).join('');
@@ -2687,14 +2730,14 @@
 
     <div class="info-box" style="margin-top:15px;">
       <strong>📌 ${esc(turma.nome)}</strong> — Tabela com notas de cada bimestre, 5º Conceito, <strong>Recuperação</strong>, <strong>Frequência (%)</strong> e <strong>Situação Final</strong> por disciplina.
-      ${(perfilAtual === 'professor' && professorLogado) ? `<br><strong>👁️ Visão do professor:</strong> somente as disciplinas de <strong>${esc(professorLogado.nome)}</strong> são exibidas — e é o que vai também para o Excel/PDF.` : ''}
+      ${(perfilAtual === 'professor' && professorLogado) ? `<br><strong>👁️ Visão do professor:</strong> <strong>TODAS</strong> as disciplinas da turma são exibidas (notas somente leitura). Apenas a <strong>Situação Final</strong> das suas disciplinas é editável — e é o que vai também para o Excel/PDF.` : ''}
       O <strong>5º Conceito</strong> é preenchido automaticamente com a média dos 4 bimestres, mas o administrador pode <strong>clicar no campo amarelo</strong> para editá-lo. Apenas notas <strong>inteiras</strong> de 0 a 10 são aceitas — se digituar um decimal, um alerta pedirá para arredondar manualmente.
       <br><strong>🗓️ Frequência (%):</strong> média das frequências lançadas pelo admin nos bimestres (aba <strong>Frequências</strong>) —
       <span style="color:#6ee7b7; font-weight:700;">&gt;75% = OK</span> ·
       <span style="color:#fde68a; font-weight:700;">=75% = Limite</span> ·
       <span style="color:#fca5a5; font-weight:700;">&lt;75% = Atenção</span>.
       <br><strong>⚖️ Situação Final:</strong> escolhida <strong>manualmente</strong> em cada campo (não há cálculo automático) entre
-      <em>Aprovado por nota e frequência</em>, <em>Aprovado pelo conselho</em>, <em>Reprovado por nota</em> e <em>Reprovado por frequência</em> — disponível também para o professor.
+      <em>Aprovado por nota e frequência</em>, <em>Aprovado pelo conselho</em>, <em>Reprovado por nota</em> e <em>Reprovado por frequência</em> — disponível também para o professor (apenas nas suas disciplinas).
       <br><strong>Regras de referência:</strong>
       <strong>Aprovação:</strong>
       <code>5º Conceito ≥ 5</code> → ✅ Aprovado &nbsp;|&nbsp;
