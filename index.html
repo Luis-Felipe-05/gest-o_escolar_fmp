@@ -24,12 +24,81 @@
 
 <body>
 
+  <!-- TELA DE ACESSO RESTRITO (somente desenvolvedor) -->
+  <div id="tela-acesso-restrito" class="container" style="max-width:450px; text-align:center; padding:40px; position:relative; display:none;">
+    <h1 style="margin-bottom:10px;">🔒 Acesso Restrito</h1>
+    <p style="color:#8fa0bd; margin-bottom:30px; font-size:14px;">Área exclusiva do desenvolvedor — Configuração de Nuvem</p>
+
+    <div id="restrito-login-form">
+      <div class="form-field" style="text-align:left; max-width:300px; margin:0 auto 20px;">
+        <label>Senha de Acesso</label>
+        <input type="password" id="input-senha-restrito" placeholder="Digite a senha" autocomplete="new-password"
+          onkeypress="if(event.key==='Enter') validarAcessoRestrito()">
+      </div>
+      <button class="btn-primary" onclick="validarAcessoRestrito()" style="max-width:300px;">🔓 Entrar</button>
+    </div>
+
+    <div id="restrito-content" style="display:none; text-align:left; margin-top:30px;">
+      <button onclick="sairAcessoRestrito()" class="btn-secondary" style="margin-bottom:20px; width:100%;">← Voltar ao Login</button>
+
+      <!-- CONFIG NUVEM (GOOGLE SHEETS / APPS SCRIPT) -->
+      <h3>☁️ Backup na Nuvem (Google Sheets / Apps Script)</h3>
+      <div class="info-box">
+        <strong>Como funciona:</strong> opcional. Se quiser que os dados fiquem salvos <strong>online</strong> (para
+        usar de qualquer computador pelo Railway),
+        crie um Google Apps Script, faça o deploy e cole aqui a <strong>URL de implantação</strong> (que termina em
+        <code>/exec</code>).
+        Enquanto não preencher a URL, o sistema continua usando o <strong>armazenamento local</strong> (localStorage) do
+        navegador.
+      </div>
+      <div class="form-row" style="align-items:center;">
+        <div class="form-field" style="flex:1; min-width:300px;">
+          <label>URL do Apps Script (implantação /exec)</label>
+          <input type="text" id="input-apps-url" placeholder="https://script.google.com/macros/s/XXXX/exec">
+        </div>
+        <button class="btn-primary" onclick="salvarAppsUrl()">Salvar URL</button>
+        <button class="btn-success" onclick="testarAppsUrl()">Testar Conexão</button>
+      </div>
+      <div id="apps-status-box" style="font-size:13px; margin-top:4px;"></div>
+
+      <!-- BACKUP E RESTAURAÇÃO -->
+      <hr class="section-divider">
+      <h3>💾 Backup e Restauração</h3>
+      <div class="info-box">
+        <strong>Como funciona:</strong> o backup é gerado <strong>direto da nuvem</strong> (Google Sheets / Apps Script),
+        que é a única fonte de dados do sistema — nada é gravado no navegador.
+        Use <strong>Baixar backup</strong> para salvar um arquivo <code>.json</code> de segurança em seu computador, e
+        <strong>Restaurar backup</strong> para recarregar esse arquivo em caso de problema.
+        <br><strong>Atenção:</strong> a restauração substitui todos os dados da nuvem pelos do arquivo.
+      </div>
+      <div class="form-row" style="align-items:center;">
+        <button type="button" class="btn-primary" onclick="baixarBackup()"
+          title="Baixa um arquivo .json com todos os dados da nuvem (turmas, alunos, notas, frequências e conceitos)">⬇️
+          Baixar backup (.json)</button>
+        <button type="button" class="btn-success" onclick="restaurarBackupArquivo()"
+          title="Restaura os dados de um arquivo .json baixado anteriormente. Substitui os dados da nuvem.">⬆️
+          Restaurar backup (.json)</button>
+        <button type="button" class="btn-secondary" onclick="restaurarBackupNuvem()"
+          title="Baixa da nuvem (Google Sheets / Apps Script) a versão mais recente dos dados e a aplica na tela.">🔄
+          Recarregar da nuvem</button>
+      </div>
+      <input type="file" id="input-backup-arquivo" accept=".json,application/json" style="display:none;"
+        onchange="aplicarBackupArquivo(event)">
+      <div id="backup-status-box" style="font-size:13px; margin-top:4px;"></div>
+    </div>
+  </div>
+
   <!-- TELA DE LOGIN -->
   <div id="tela-login" class="container" style="max-width:450px; text-align:center; padding:40px; position:relative;">
     <button onclick="abrirEstatisticas()"
       style="position:absolute; top:14px; right:14px; padding:8px 14px; background:#00897b; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; box-shadow:0 2px 6px rgba(0,137,123,0.3);"
       title="Acesso livre">
       📊 Estatísticas
+    </button>
+    <button onclick="abrirAcessoRestrito()"
+      style="position:absolute; top:14px; left:14px; padding:8px 14px; background:#6a1b9a; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; box-shadow:0 2px 6px rgba(106,27,154,0.3);"
+      title="Acesso restrito (desenvolvedor)">
+      🔒 Restrito
     </button>
     <h1 style="margin-bottom:10px;">Sistema de Lançamento de Notas</h1>
     <p style="color:#8fa0bd; margin-bottom:30px; font-size:14px;">Selecione seu perfil para acessar o sistema</p>
@@ -316,52 +385,6 @@
         </div>
         <button class="btn-primary" onclick="salvarSenhaAdmin()">Salvar Senha</button>
       </div>
-
-      <!-- CONFIG NUVEM (GOOGLE SHEETS / APPS SCRIPT) -->
-      <hr class="section-divider">
-      <h3>☁️ Backup na Nuvem (Google Sheets / Apps Script)</h3>
-      <div class="info-box">
-        <strong>Como funciona:</strong> opcional. Se quiser que os dados fiquem salvos <strong>online</strong> (para
-        usar de qualquer computador pelo Railway),
-        crie um Google Apps Script, faça o deploy e cole aqui a <strong>URL de implantação</strong> (que termina em
-        <code>/exec</code>).
-        Enquanto não preencher a URL, o sistema continua usando o <strong>armazenamento local</strong> (localStorage) do
-        navegador.
-      </div>
-      <div class="form-row" style="align-items:center;">
-        <div class="form-field" style="flex:1; min-width:300px;">
-          <label>URL do Apps Script (implantação /exec)</label>
-          <input type="text" id="input-apps-url" placeholder="https://script.google.com/macros/s/XXXX/exec">
-        </div>
-        <button class="btn-primary" onclick="salvarAppsUrl()">Salvar URL</button>
-        <button class="btn-success" onclick="testarAppsUrl()">Testar Conexão</button>
-      </div>
-      <div id="apps-status-box" style="font-size:13px; margin-top:4px;"></div>
-
-      <!-- BACKUP E RESTAURAÇÃO -->
-      <hr class="section-divider">
-      <h3>💾 Backup e Restauração</h3>
-      <div class="info-box">
-        <strong>Como funciona:</strong> o backup é gerado <strong>direto da nuvem</strong> (Google Sheets / Apps Script),
-        que é a única fonte de dados do sistema — nada é gravado no navegador.
-        Use <strong>Baixar backup</strong> para salvar um arquivo <code>.json</code> de segurança em seu computador, e
-        <strong>Restaurar backup</strong> para recarregar esse arquivo em caso de problema.
-        <br><strong>Atenção:</strong> a restauração substitui todos os dados da nuvem pelos do arquivo.
-      </div>
-      <div class="form-row" style="align-items:center;">
-        <button type="button" class="btn-primary" onclick="baixarBackup()"
-          title="Baixa um arquivo .json com todos os dados da nuvem (turmas, alunos, notas, frequências e conceitos)">⬇️
-          Baixar backup (.json)</button>
-        <button type="button" class="btn-success" onclick="restaurarBackupArquivo()"
-          title="Restaura os dados de um arquivo .json baixado anteriormente. Substitui os dados da nuvem.">⬆️
-          Restaurar backup (.json)</button>
-        <button type="button" class="btn-secondary" onclick="restaurarBackupNuvem()"
-          title="Baixa da nuvem (Google Sheets / Apps Script) a versão mais recente dos dados e a aplica na tela.">🔄
-          Recarregar da nuvem</button>
-      </div>
-      <input type="file" id="input-backup-arquivo" accept=".json,application/json" style="display:none;"
-        onchange="aplicarBackupArquivo(event)">
-      <div id="backup-status-box" style="font-size:13px; margin-top:4px;"></div>
 
       <!-- CRIAR TURMA -->
       <h3>Nova Turma</h3>

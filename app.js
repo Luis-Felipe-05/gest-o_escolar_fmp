@@ -3343,6 +3343,42 @@
       }
     }
 
+    // ====================== ACESSO RESTRITO (somente desenvolvedor) ======================
+    const SENHA_ACESSO_RESTRITO = 'a%0gLKYG5igitOu6qrkG';
+
+    function abrirAcessoRestrito() {
+      document.getElementById('tela-login').style.display = 'none';
+      document.getElementById('sistema-principal').style.display = 'none';
+      document.getElementById('tela-estatisticas').style.display = 'none';
+      document.getElementById('tela-boletim-publico').style.display = 'none';
+      document.getElementById('tela-acesso-restrito').style.display = 'block';
+      // Reset form
+      document.getElementById('restrito-login-form').style.display = 'block';
+      document.getElementById('restrito-content').style.display = 'none';
+      document.getElementById('input-senha-restrito').value = '';
+      document.getElementById('input-senha-restrito').focus();
+    }
+
+    function validarAcessoRestrito() {
+      const senha = document.getElementById('input-senha-restrito').value;
+      if (senha === SENHA_ACESSO_RESTRITO) {
+        document.getElementById('restrito-login-form').style.display = 'none';
+        document.getElementById('restrito-content').style.display = 'block';
+        // Carregar URL atual da nuvem no input
+        const campoUrl = document.getElementById('input-apps-url');
+        if (campoUrl) campoUrl.value = estado.appsUrl || '';
+      } else {
+        alert('Senha incorreta. Acesso negado.');
+        document.getElementById('input-senha-restrito').value = '';
+        document.getElementById('input-senha-restrito').focus();
+      }
+    }
+
+    function sairAcessoRestrito() {
+      document.getElementById('tela-acesso-restrito').style.display = 'none';
+      document.getElementById('tela-login').style.display = 'block';
+    }
+
     function abrirEstatisticas() {
       perfilAtual = null;
       professorLogado = null;
