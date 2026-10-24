@@ -2625,17 +2625,29 @@
                 <td>${n3 !== undefined ? Number(n3).toFixed(1) : '—'}</td>
                 <td>${n4 !== undefined ? Number(n4).toFixed(1) : '—'}</td>
                 <td style="background:#e8f5e9;">
-                  ${perfilAtual === 'admin' ? `
-                    <input type="number" class="nota-input" min="0" max="10" step="1"
-                      value="${conceitoFinalNum !== null ? conceitoFinalNum : ''}"
-                      placeholder="0-10"
-                      title="5º Conceito (somente o administrador edita)"
-                      style="background:#fff3cd; border-color:#2e7d32;"
-                      onchange="salvarConceitoFinal('${turmaId}', '${aluno.id}', '${disc.id}', this.value)">
-                  ` : `
-                    <span title="5º Conceito — edição restrita ao administrador"
-                      style="font-weight:700; color:#6ee7b7;">${conceitoFinalNum !== null ? Number(conceitoFinalNum).toFixed(1) : '—'}</span>
-                  `}
+                  ${(() => {
+                    const isMinhaDisciplina = discIdsProfessor.includes(disc.id);
+                    const podeEditarConceito = perfilAtual === 'admin' || (perfilAtual === 'professor' && professorLogado && isMinhaDisciplina);
+                    if (podeEditarConceito) {
+                      const titulo = perfilAtual === 'admin' 
+                        ? '5º Conceito (administrador edita — sobrescreve a média automática)'
+                        : '5º Conceito (edite para sobrescrever a média automática dos 4 bimestres)';
+                      const corBorda = perfilAtual === 'admin' ? '#2e7d32' : '#e65100';
+                      return `
+                        <input type="number" class="nota-input" min="0" max="10" step="1"
+                          value="${conceitoFinalNum !== null ? conceitoFinalNum : ''}"
+                          placeholder="0-10"
+                          title="${titulo}"
+                          style="background:#fff3cd; border-color:${corBorda};"
+                          onchange="salvarConceitoFinal('${turmaId}', '${aluno.id}', '${disc.id}', this.value)">
+                      `;
+                    } else {
+                      return `
+                        <span title="5º Conceito — média automática dos 4 bimestres (editável pelo professor da disciplina ou admin)"
+                          style="font-weight:700; color:#6ee7b7;">${conceitoFinalNum !== null ? Number(conceitoFinalNum).toFixed(1) : '—'}</span>
+                      `;
+                    }
+                  })()}
                 </td>
                 <td class="${recCor}" style="font-size:11px; padding:4px;">${labelRecuperacao(recDisc)}</td>
                 <td style="font-size:11px; padding:4px; text-align:center;">${getFrequenciaMedia(turma, aluno.id)}</td>
@@ -2730,15 +2742,14 @@
 
     <div class="info-box" style="margin-top:15px;">
       <strong>📌 ${esc(turma.nome)}</strong> — Tabela com notas de cada bimestre, 5º Conceito, <strong>Recuperação</strong>, <strong>Frequência (%)</strong> e <strong>Situação Final</strong> por disciplina.
-      ${(perfilAtual === 'professor' && professorLogado) ? `<br><strong>👁️ Visão do professor:</strong> <strong>TODAS</strong> as disciplinas da turma são exibidas (notas somente leitura). Apenas a <strong>Situação Final</strong> das suas disciplinas é editável — e é o que vai também para o Excel/PDF.` : ''}
-      O <strong>5º Conceito</strong> é preenchido automaticamente com a média dos 4 bimestres, mas o administrador pode <strong>clicar no campo amarelo</strong> para editá-lo. Apenas notas <strong>inteiras</strong> de 0 a 10 são aceitas — se digituar um decimal, um alerta pedirá para arredondar manualmente.
+      ${(perfilAtual === 'professor' && professorLogado) ? `<br><strong>👁️ Visão do professor:</strong> <strong>TODAS</strong> as disciplinas da turma são exibidas (notas dos bimestres somente leitura). O <strong>5º Conceito</strong> e a <strong>Situação Final</strong> das suas disciplinas são editáveis — e é o que vai também para o Excel/PDF.` : ''}
+      O <strong>5º Conceito</strong> é preenchido automaticamente com a média dos 4 bimestres, mas o <strong>administrador</strong> e o <strong>professor da disciplina</strong> podem <strong>clicar no campo amarelo</strong> para editá-lo (sobrescreve a média automática). Apenas notas <strong>inteiras</strong> de 0 a 10 são aceitas — se digituar um decimal, um alerta pedirá para arredondar manualmente.
       <br><strong>🗓️ Frequência (%):</strong> média das frequências lançadas pelo admin nos bimestres (aba <strong>Frequências</strong>) —
-      <span style="color:#6ee7b7; font-weight:700;">&gt;75% = OK</span> ·
+      <span style="color:#6ee7b7; font-weight:700;">>75% = OK</span> ·
       <span style="color:#fde68a; font-weight:700;">=75% = Limite</span> ·
-      <span style="color:#fca5a5; font-weight:700;">&lt;75% = Atenção</span>.
+      <span style="color:#fca5a5; font-weight:700;"><75% = Atenção</span>.
       <br><strong>⚖️ Situação Final:</strong> escolhida <strong>manualmente</strong> em cada campo (não há cálculo automático) entre
-      <em>Aprovado por nota e frequência</em>, <em>Aprovado pelo conselho</em>, <em>Reprovado por nota</em> e <em>Reprovado por frequência</em> — disponível também para o professor (apenas nas suas disciplinas).
-      <br><strong>Regras de referência:</strong>
+      <em>Aprovado por nota e frequência</em>, <em>Aprovado pelo conselho</em>, <em>Reprovado por nota</em> e <em>Reprovado por frequência</em> — disponível também para o professor (apenas nas suas disciplinas).<strong>Regras de referência:</strong>
       <strong>Aprovação:</strong>
       <code>5º Conceito ≥ 5</code> → ✅ Aprovado &nbsp;|&nbsp;
       <code>5º Conceito &lt; 5</code> → ❌ Reprovado.
