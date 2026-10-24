@@ -520,7 +520,11 @@
         backendOk === false ? ('⚠️ ' + MSG_BACKEND_DESATUALIZADO) : '✅ Dados carregados da nuvem.',
         backendOk === false ? 'erro' : undefined
       );
-      if (perfilAtual) {
+      if (perfilAtual === 'publico') {
+        // Atualizar tela de boletim público se estiver visível
+        popularSelectTurmasBoletimPublico();
+        renderBoletimPublico();
+      } else if (perfilAtual) {
         renderAbaAtiva();
       } else {
         renderAdmin();
@@ -2428,7 +2432,7 @@
 
     function getFrequenciaMedia(turma, alunoId) {
       const media = getFrequenciaMediaNum(turma, alunoId);
-      if (media === null) return '<span style="color:#999;">—</span>';
+      if (media === null) return '<span style="color:#8fa0bd;">—</span>';
       const cls = classificarFrequencia(media);
       return `<span style="color:${corFrequencia(cls)}; font-weight:700;">${media.toFixed(1)}%</span>`;
     }
@@ -2447,6 +2451,23 @@
       });
       if (cont === 0) return '—';
       return Number((soma / cont).toFixed(1)) + '%';
+    }
+
+    // Versão numérica para uso em cálculos (retorna número ou null)
+    function getFrequenciaMediaSalaNum(turma) {
+      if (!turma.frequencias) turma.frequencias = {};
+      let soma = 0, cont = 0;
+      turma.alunos.forEach(al => {
+        [1, 2, 3, 4].forEach(b => {
+          const fb = turma.frequencias[b];
+          if (fb && fb[al.id] !== undefined && fb[al.id] !== null) {
+            soma += Number(fb[al.id]);
+            cont++;
+          }
+        });
+      });
+      if (cont === 0) return null;
+      return Number((soma / cont).toFixed(1));
     }
 
     function getSituacaoFinal(turma, alunoId, discId) {
@@ -2790,161 +2811,7 @@
         }
       }
 
-      if (typeof XLSX === 'undefined') {
-        alert('A biblioteca para exportar Excel não pôde ser carregada. Verifique sua conexão.');
-        return;
-      }
-
-      // ----- Cabeçalho: uma coluna por disciplina × (1ºB, 2ºB, 3ºB, 4ºB, 5º Conceito, Recuperação, Freq. (%), Situação Final) + Média Geral -----
-      const header1 = ['Aluno'];
-      disciplinasVisiveis.forEach(d => {
-        header1.push(d.nome, '', '', '', '', '', '', '');
-      });
-      header1.push('Média Geral');
-
-      const header2 = [''];
-      disciplinasVisiveis.forEach(() => {
-        header2.push('1ºB', '2ºB', '3ºB', '4ºB', '5º Conceito', 'Recuperação', 'Freq. (%)', 'Situação Final');
-      });
-      header2.push('');
-
-      const rows = [header1, header2];
-
-      turma.alunos.forEach(aluno => {
-        const mediasAluno = [];
-        const linha = [aluno.nome];
-        const freqMediaAluno = getFrequenciaMediaNum(turma, aluno.id); // frequência média (%) — mesma do boletim
-        disciplinasVisiveis.forEach(disc => {
-          const n1 = turma.notas?.[1]?.[disc.id]?.[aluno.id];
-          const n2 = turma.notas?.[2]?.[disc.id]?.[aluno.id];
-          const n3 = turma.notas?.[3]?.[disc.id]?.[aluno.id];
-          const n4 = turma.notas?.[4]?.[disc.id]?.[aluno.id];
-          const v1 = (n1 === undefined || n1 === null) ? 0 : Number(n1);
-          const v2 = (n2 === undefined || n2 === null) ? 0 : Number(n2);
-          const v3 = (n3 === undefined || n3 === null) ? 0 : Number(n3);
-          const v4 = (n4 === undefined || n4 === null) ? 0 : Number(n4);
-          const mediaCalc = (v1 + v2 + v3 + v4) / 4;
-          const editado = turma.conceitosFinais?.[aluno.id]?.[disc.id];
-          const conceito = editado !== undefined && editado !== null ? Number(editado) : Number(mediaCalc.toFixed(1));
-          mediasAluno.push(mediaCalc);
-          const mediaSem1 = (v1 + v2) / 2;
-          const mediaSem2 = (v3 + v4) / 2;
-          const aprov = classificarAprovacao(conceito);
-          const rec = classificarRecuperacao(mediaSem1, mediaSem2);
-          linha.push(
-            n1 !== undefined ? Number(n1) : null,
-            n2 !== undefined ? Number(n2) : null,
-            n3 !== undefined ? Number(n3) : null,
-            n4 !== undefined ? Number(n4) : null,
-            conceito,
-            labelRecuperacao(rec),
-            freqMediaAluno !== null ? Number(freqMediaAluno.toFixed(1)) : null,
-            labelSituacaoFinal(getSituacaoFinal(turma, aluno.id, disc.id))
-          );
-        });
-        const mediaGeral = mediasAluno.length ? (mediasAluno.reduce((a, b) => a + b, 0) / mediasAluno.length) : null;
-        linha.push(mediaGeral !== null ? Number(mediaGeral.toFixed(2)) : null);
-        rows.push(linha);
-      });
-
-      // Linha da Média da Sala (5º conceito por disciplina + médias por bimestre)
-      const mediaSalaPorDisc = disciplinasVisiveis.map(disc => {
-        let soma = 0, count = 0;
-        turma.alunos.forEach(aluno => {
-          const n1 = turma.notas?.[1]?.[disc.id]?.[aluno.id];
-          const n2 = turma.notas?.[2]?.[disc.id]?.[aluno.id];
-          const n3 = turma.notas?.[3]?.[disc.id]?.[aluno.id];
-          const n4 = turma.notas?.[4]?.[disc.id]?.[aluno.id];
-          const temNota = [n1, n2, n3, n4].some(n => n !== undefined && n !== null);
-          if (!temNota) return;
-          const editado = turma.conceitosFinais?.[aluno.id]?.[disc.id];
-          const med = editado !== undefined && editado !== null ? Number(editado) : (Number(n1 || 0) + Number(n2 || 0) + Number(n3 || 0) + Number(n4 || 0)) / 4;
-          soma += med; count++;
-        });
-        return count ? soma / count : null;
-      });
-      const mediaSalaBim = [1, 2, 3, 4].map(b => disciplinasVisiveis.map(disc => {
-        let soma = 0, count = 0;
-        turma.alunos.forEach(aluno => {
-          const n = turma.notas?.[b]?.[disc.id]?.[aluno.id];
-          if (n !== undefined && n !== null) { soma += Number(n); count++; }
-        });
-        return count ? soma / count : null;
-      }));
-
-      // Frequência média da sala (todos os alunos × bimestres lançados)
-      let freqSalaNum = null;
-      {
-        let somaF = 0, contF = 0;
-        turma.alunos.forEach(al => {
-          [1, 2, 3, 4].forEach(b => {
-            const v = turma.frequencias?.[b]?.[al.id];
-            if (v !== undefined && v !== null && v !== '') { somaF += Number(v); contF++; }
-          });
-        });
-        if (contF) freqSalaNum = Number((somaF / contF).toFixed(1));
-      }
-
-      const linhaSala = ['🏫 Média da Sala'];
-      disciplinasVisiveis.forEach((disc, di) => {
-        const m = mediaSalaPorDisc[di];
-        const c1 = mediaSalaBim[0][di];
-        const c2 = mediaSalaBim[1][di];
-        const c3 = mediaSalaBim[2][di];
-        const c4 = mediaSalaBim[3][di];
-        const sem1 = (c1 !== null || c2 !== null) ? ((c1 ?? 0) + (c2 ?? 0)) / 2 : null;
-        const sem2 = (c3 !== null || c4 !== null) ? ((c3 ?? 0) + (c4 ?? 0)) / 2 : null;
-        const recSala = (sem1 !== null || sem2 !== null) ? labelRecuperacao(classificarRecuperacao(sem1, sem2)) : '—';
-        linhaSala.push(
-          c1 !== null ? Number(c1.toFixed(1)) : null,
-          c2 !== null ? Number(c2.toFixed(1)) : null,
-          c3 !== null ? Number(c3.toFixed(1)) : null,
-          c4 !== null ? Number(c4.toFixed(1)) : null,
-          m !== null ? Number(m.toFixed(1)) : null,
-          recSala,
-          freqSalaNum,
-          '—'
-        );
-      });
-      const valsSala = mediaSalaPorDisc.filter(v => v !== null);
-      linhaSala.push(valsSala.length ? Number((valsSala.reduce((a, b) => a + b, 0) / valsSala.length).toFixed(1)) : null);
-      rows.push(linhaSala);
-
-      // ----- Nome do arquivo deixado limpo a partir do nome da turma -----
-      const nomeArquivo = `Boletim_${turma.nome.replace(/[\\\/:*?"<>|]+/g, '').replace(/\s+/g, '_')}.xlsx`;
-
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-
-      // Larguras aproximadas das colunas para melhor leitura
-      ws['!cols'] = [{ wch: 25 }];
-      disciplinasVisiveis.forEach(() => ws['!cols'].push({ wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 12 }, { wch: 26 }));
-      ws['!cols'].push({ wch: 12 });
-
-      XLSX.utils.book_append_sheet(wb, ws, 'Boletim');
-      // ----- Segunda aba: frequências por bimestre (lançadas pelo admin) -----
-      const freqRows = [['Aluno', '1ºB (%)', '2ºB (%)', '3ºB (%)', '4ºB (%)', 'Média (%)', 'Situação (>75 OK / =75 Limite / <75 Atenção)']];
-      turma.alunos.forEach(al => {
-        const f1 = getFrequenciaBimestre(turma, 1, al.id);
-        const f2 = getFrequenciaBimestre(turma, 2, al.id);
-        const f3 = getFrequenciaBimestre(turma, 3, al.id);
-        const f4 = getFrequenciaBimestre(turma, 4, al.id);
-        const media = getFrequenciaMediaNum(turma, al.id);
-        freqRows.push([
-          al.nome,
-          f1 === '' ? null : Number(f1),
-          f2 === '' ? null : Number(f2),
-          f3 === '' ? null : Number(f3),
-          f4 === '' ? null : Number(f4),
-          media !== null ? Number(media.toFixed(1)) : null,
-          media !== null ? labelFrequencia(classificarFrequencia(media)) : '—'
-        ]);
-      });
-      const wsFreq = XLSX.utils.aoa_to_sheet(freqRows);
-      wsFreq['!cols'] = [{ wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 42 }];
-      XLSX.utils.book_append_sheet(wb, wsFreq, 'Frequências');
-
-      XLSX.writeFile(wb, nomeArquivo);
+      exportarBoletimExcelInterno(turma, disciplinasVisiveis, false);
     }
 
     // Exporta o boletim final da turma selecionada em PDF (A4 paisagem, tabela nativa — nada é cortado)
@@ -2986,8 +2853,182 @@
           return;
         }
       }
-      const N = disc.length;
 
+      exportarBoletimPDFInterno(turma, disc, false);
+      if (btn) { btn.disabled = false; btn.textContent = '🖨️ Exportar em PDF'; }
+    }
+
+    // ====================== EXPORTAÇÃO INTERNA REUTILIZÁVEL ======================
+    // Exporta boletim para Excel recebendo a turma e disciplinas diretamente (usado pelo admin e público)
+    function exportarBoletimExcelInterno(turma, disciplinasVisiveis, isPublico = false) {
+      if (typeof XLSX === 'undefined') {
+        alert('A biblioteca para exportar Excel não pôde ser carregada. Verifique sua conexão.');
+        return;
+      }
+
+      const header1 = ['Aluno'];
+      disciplinasVisiveis.forEach(d => {
+        header1.push(d.nome, '', '', '', '', '', '', '');
+      });
+      header1.push('Média Geral');
+
+      const header2 = [''];
+      disciplinasVisiveis.forEach(() => {
+        header2.push('1ºB', '2ºB', '3ºB', '4ºB', '5º Conceito', 'Recuperação', 'Freq. (%)', 'Situação Final');
+      });
+      header2.push('');
+
+      const rows = [header1, header2];
+
+      turma.alunos.forEach(aluno => {
+        const mediasAluno = [];
+        const linha = [aluno.nome];
+        const freqMediaAluno = getFrequenciaMediaNum(turma, aluno.id);
+        disciplinasVisiveis.forEach(disc => {
+          const n1 = turma.notas?.[1]?.[disc.id]?.[aluno.id];
+          const n2 = turma.notas?.[2]?.[disc.id]?.[aluno.id];
+          const n3 = turma.notas?.[3]?.[disc.id]?.[aluno.id];
+          const n4 = turma.notas?.[4]?.[disc.id]?.[aluno.id];
+          const v1 = (n1 === undefined || n1 === null) ? 0 : Number(n1);
+          const v2 = (n2 === undefined || n2 === null) ? 0 : Number(n2);
+          const v3 = (n3 === undefined || n3 === null) ? 0 : Number(n3);
+          const v4 = (n4 === undefined || n4 === null) ? 0 : Number(n4);
+          const mediaCalc = (v1 + v2 + v3 + v4) / 4;
+          const editado = turma.conceitosFinais?.[aluno.id]?.[disc.id];
+          const conceito = editado !== undefined && editado !== null ? Number(editado) : Number(mediaCalc.toFixed(1));
+          mediasAluno.push(mediaCalc);
+          const mediaSem1 = (v1 + v2) / 2;
+          const mediaSem2 = (v3 + v4) / 2;
+          const aprov = classificarAprovacao(conceito);
+          const rec = classificarRecuperacao(mediaSem1, mediaSem2);
+          linha.push(
+            n1 !== undefined ? Number(n1) : null,
+            n2 !== undefined ? Number(n2) : null,
+            n3 !== undefined ? Number(n3) : null,
+            n4 !== undefined ? Number(n4) : null,
+            conceito,
+            labelRecuperacao(rec),
+            freqMediaAluno !== null ? Number(freqMediaAluno.toFixed(1)) : null,
+            labelSituacaoFinal(getSituacaoFinal(turma, aluno.id, disc.id))
+          );
+        });
+        const mediaGeral = mediasAluno.length ? (mediasAluno.reduce((a, b) => a + b, 0) / mediasAluno.length) : null;
+        linha.push(mediaGeral !== null ? Number(mediaGeral.toFixed(2)) : null);
+        rows.push(linha);
+      });
+
+      // Linha da Média da Sala
+      const mediaSalaPorDisc = disciplinasVisiveis.map(disc => {
+        let soma = 0, count = 0;
+        turma.alunos.forEach(aluno => {
+          const n1 = turma.notas?.[1]?.[disc.id]?.[aluno.id];
+          const n2 = turma.notas?.[2]?.[disc.id]?.[aluno.id];
+          const n3 = turma.notas?.[3]?.[disc.id]?.[aluno.id];
+          const n4 = turma.notas?.[4]?.[disc.id]?.[aluno.id];
+          const temNota = [n1, n2, n3, n4].some(n => n !== undefined && n !== null);
+          if (!temNota) return;
+          const editado = turma.conceitosFinais?.[aluno.id]?.[disc.id];
+          const med = editado !== undefined && editado !== null ? Number(editado) : (Number(n1 || 0) + Number(n2 || 0) + Number(n3 || 0) + Number(n4 || 0)) / 4;
+          soma += med; count++;
+        });
+        return count ? soma / count : null;
+      });
+      const mediaSalaBim = [1, 2, 3, 4].map(b => disciplinasVisiveis.map(disc => {
+        let soma = 0, count = 0;
+        turma.alunos.forEach(aluno => {
+          const n = turma.notas?.[b]?.[disc.id]?.[aluno.id];
+          if (n !== undefined && n !== null) { soma += Number(n); count++; }
+        });
+        return count ? soma / count : null;
+      }));
+
+      let freqSalaNum = null;
+      {
+        let somaF = 0, contF = 0;
+        turma.alunos.forEach(al => {
+          [1, 2, 3, 4].forEach(b => {
+            const v = turma.frequencias?.[b]?.[al.id];
+            if (v !== undefined && v !== null && v !== '') { somaF += Number(v); contF++; }
+          });
+        });
+        if (contF) freqSalaNum = Number((somaF / contF).toFixed(1));
+      }
+
+      const linhaSala = ['🏫 Média da Sala'];
+      disciplinasVisiveis.forEach((disc, di) => {
+        const m = mediaSalaPorDisc[di];
+        const c1 = mediaSalaBim[0][di];
+        const c2 = mediaSalaBim[1][di];
+        const c3 = mediaSalaBim[2][di];
+        const c4 = mediaSalaBim[3][di];
+        const sem1 = (c1 !== null || c2 !== null) ? ((c1 ?? 0) + (c2 ?? 0)) / 2 : null;
+        const sem2 = (c3 !== null || c4 !== null) ? ((c3 ?? 0) + (c4 ?? 0)) / 2 : null;
+        const recSala = (sem1 !== null || sem2 !== null) ? labelRecuperacao(classificarRecuperacao(sem1, sem2)) : '—';
+        linhaSala.push(
+          c1 !== null ? Number(c1.toFixed(1)) : null,
+          c2 !== null ? Number(c2.toFixed(1)) : null,
+          c3 !== null ? Number(c3.toFixed(1)) : null,
+          c4 !== null ? Number(c4.toFixed(1)) : null,
+          m !== null ? Number(m.toFixed(1)) : null,
+          recSala,
+          freqSalaNum,
+          '—'
+        );
+      });
+      const valsSala = mediaSalaPorDisc.filter(v => v !== null);
+      linhaSala.push(valsSala.length ? Number((valsSala.reduce((a, b) => a + b, 0) / valsSala.length).toFixed(1)) : null);
+      rows.push(linhaSala);
+
+      const nomeArquivo = `Boletim_${turma.nome.replace(/[\\\/:*?"<>|]+/g, '').replace(/\s+/g, '_')}.xlsx`;
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+
+      ws['!cols'] = [{ wch: 25 }];
+      disciplinasVisiveis.forEach(() => ws['!cols'].push({ wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 12 }, { wch: 26 }));
+      ws['!cols'].push({ wch: 12 });
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Boletim');
+
+      // Segunda aba: frequências por bimestre
+      const freqRows = [['Aluno', '1ºB (%)', '2ºB (%)', '3ºB (%)', '4ºB (%)', 'Média (%)', 'Situação (>75 OK / =75 Limite / <75 Atenção)']];
+      turma.alunos.forEach(al => {
+        const f1 = getFrequenciaBimestre(turma, 1, al.id);
+        const f2 = getFrequenciaBimestre(turma, 2, al.id);
+        const f3 = getFrequenciaBimestre(turma, 3, al.id);
+        const f4 = getFrequenciaBimestre(turma, 4, al.id);
+        const media = getFrequenciaMediaNum(turma, al.id);
+        freqRows.push([
+          al.nome,
+          f1 === '' ? null : Number(f1),
+          f2 === '' ? null : Number(f2),
+          f3 === '' ? null : Number(f3),
+          f4 === '' ? null : Number(f4),
+          media !== null ? Number(media.toFixed(1)) : null,
+          media !== null ? labelFrequencia(classificarFrequencia(media)) : '—'
+        ]);
+      });
+      const wsFreq = XLSX.utils.aoa_to_sheet(freqRows);
+      wsFreq['!cols'] = [{ wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 42 }];
+      XLSX.utils.book_append_sheet(wb, wsFreq, 'Frequências');
+
+      XLSX.writeFile(wb, nomeArquivo);
+    }
+
+    // Exporta boletim para PDF recebendo a turma e disciplinas diretamente
+    function exportarBoletimPDFInterno(turma, disciplinasVisiveis, isPublico = false) {
+      const { jsPDF } = (window.jspdf || {});
+      let autoTableDisponivel = false;
+      try {
+        const probe = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        autoTableDisponivel = typeof probe.autoTable === 'function';
+      } catch (e) { autoTableDisponivel = false; }
+      if (!jsPDF || !autoTableDisponivel) {
+        alert('A biblioteca de PDF não pôde ser carregada. Verifique sua conexão.');
+        return;
+      }
+
+      const N = disciplinasVisiveis.length;
       const vnota = (b, discId, a) => turma.notas?.[b]?.[discId]?.[a];
       const notaOuT = (n) => (n !== undefined && n !== null) ? Number(n).toFixed(1) : '—';
 
@@ -3008,18 +3049,17 @@
         return recLabel(classificarRecuperacao((v1 + v2) / 2, (v3 + v4) / 2));
       };
 
-      // Cabeçalho em 2 linhas (Aluno e Média Geral em rowspan; cada disciplina com colSpan=8)
+      // Cabeçalho em 2 linhas
       const head1 = [{ content: 'Aluno', rowSpan: 2 }];
-      disc.forEach(d => head1.push({ content: `${d.nome}\n(${d.professor})`, colSpan: 8 }));
+      disciplinasVisiveis.forEach(d => head1.push({ content: `${d.nome}\n(${d.professor})`, colSpan: 8 }));
       head1.push({ content: 'Média\nGeral', rowSpan: 2 });
 
       const head2 = [];
-      disc.forEach(() => head2.push(
+      disciplinasVisiveis.forEach(() => head2.push(
         { content: '1ºB' }, { content: '2ºB' }, { content: '3ºB' }, { content: '4ºB' },
         { content: '5º Conc' }, { content: 'Recup.' }, { content: 'Freq' }, { content: 'Situação Final' }
       ));
 
-      // Situação Final abreviada para o PDF (decisão manual do professor)
       const sitCurta = {
         aprovado_nota_freq: 'Aprov. Nota+Freq',
         aprovado_conselho: 'Aprov. Conselho',
@@ -3036,7 +3076,7 @@
         const freqTexto = freqMedia !== null
           ? freqMedia.toFixed(1) + '% ' + labelFrequencia(classificarFrequencia(freqMedia))
           : '—';
-        disc.forEach(d => {
+        disciplinasVisiveis.forEach(d => {
           const v1 = vnota(1, d.id, aluno.id), v2 = vnota(2, d.id, aluno.id), v3 = vnota(3, d.id, aluno.id), v4 = vnota(4, d.id, aluno.id);
           const c = conceitoFinal(aluno.id, d.id);
           mediasAluno.push(mediaCalcDisc(aluno.id, d.id));
@@ -3048,8 +3088,8 @@
         body.push(linha);
       });
 
-      // Média da sala (mesma regra do boletim: só alunos com nota)
-      const mediaSalaPorDisc = disc.map(d => {
+      // Média da sala
+      const mediaSalaPorDisc = disciplinasVisiveis.map(d => {
         let soma = 0, count = 0;
         turma.alunos.forEach(aluno => {
           const v1 = vnota(1, d.id, aluno.id), v2 = vnota(2, d.id, aluno.id), v3 = vnota(3, d.id, aluno.id), v4 = vnota(4, d.id, aluno.id);
@@ -3074,9 +3114,8 @@
           freqSalaPDF = mediaFSala.toFixed(1) + '% ' + labelFrequencia(classificarFrequencia(mediaFSala));
         }
       }
-      disc.forEach((d, di) => {
+      disciplinasVisiveis.forEach((d, di) => {
         const m = mediaSalaPorDisc[di];
-        // Recuperação da sala: médias por bimestre considerando só alunos com nota lançada
         const mediaBimSala = (b) => {
           let s = 0, c = 0;
           turma.alunos.forEach(al => { const n = vnota(b, d.id, al.id); if (n !== undefined && n !== null) { s += Number(n); c++; } });
@@ -3092,8 +3131,8 @@
       linhaSala.push(vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : '—');
       body.push(linhaSala);
 
-      // Média da Sala por Bimestre (mesma regra do boletim na tela: só alunos com nota no bimestre)
-      const mediaSalaBimestreBoletim = [1, 2, 3, 4].map(b => disc.map(d => {
+      // Média da Sala por Bimestre
+      const mediaSalaBimestreBoletim = [1, 2, 3, 4].map(b => disciplinasVisiveis.map(d => {
         let soma = 0, count = 0;
         turma.alunos.forEach(aluno => {
           const n = vnota(b, d.id, aluno.id);
@@ -3104,11 +3143,10 @@
 
       // A4 paisagem
       const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-      const pageW = doc.internal.pageSize.getWidth();   // 297
+      const pageW = doc.internal.pageSize.getWidth();
       const marginL = 8, marginR = 8;
       const contentW = pageW - marginL - marginR;
 
-      // Larguras proporcionais: Aluno(3) + cada disciplina 8 colunas(1 cada) + Média Geral(1.5)
       const totalWeight = 3 + 8 * N + 1.5;
       const baseCol = contentW / totalWeight;
       const colWidths = [baseCol * 3];
@@ -3117,15 +3155,14 @@
       }
       colWidths.push(baseCol * 1.5);
 
-      // Fonte ajustada ao tamanho das colunas (cabe tudo sem espremer demais)
       const fontSize = Math.max(4.5, Math.min(6.5, baseCol * 0.42));
 
-      const turmaNome = turma.nome || turmaId;
+      const turmaNome = turma.nome;
 
-      // Título do documento
+      // Título
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(13);
-      doc.text('Boletim Final — ' + turmaNome, marginL, 9);
+      doc.text('Boletim Final — ' + turmaNome + (isPublico ? ' (Visualização Pública)' : ''), marginL, 9);
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
       doc.setTextColor(90, 90, 90);
@@ -3179,7 +3216,7 @@
         }
       });
 
-      // ----- Segunda tabela: Média da Sala por Bimestre -----
+      // Segunda tabela: Média da Sala por Bimestre
       const abaixo = (doc.lastAutoTable && doc.lastAutoTable.finalY) || 20;
       const fimTabela = abaixo + 8;
       const alturaPagina = doc.internal.pageSize.getHeight();
@@ -3192,11 +3229,11 @@
       doc.setTextColor(0, 0, 0);
 
       const bimHead = [{ content: 'Bimestre', styles: { halign: 'left', fontStyle: 'bold' } }];
-      disc.forEach(d => bimHead.push({ content: d.nome }));
+      disciplinasVisiveis.forEach(d => bimHead.push({ content: d.nome }));
 
       const bimBody = [1, 2, 3, 4].map(b => {
         const linha = [`${b}º Bimestre`];
-        disc.forEach((d, di) => {
+        disciplinasVisiveis.forEach((d, di) => {
           const m = mediaSalaBimestreBoletim[b - 1][di];
           linha.push(m !== null ? m.toFixed(1) : '—');
         });
@@ -3216,7 +3253,6 @@
 
       const nomeArquivo = `Boletim_${String(turmaNome).replace(/[\\\/:*?"<>|]+/g, '').replace(/\s+/g, '_')}.pdf`;
       doc.save(nomeArquivo);
-      if (btn) { btn.disabled = false; btn.textContent = '🖨️ Exportar em PDF'; }
     }
 
     // ====================== ESTATÍSTICAS ======================
@@ -3321,6 +3357,287 @@
       document.getElementById('tela-estatisticas').style.display = 'none';
       document.getElementById('tela-login').style.display = 'block';
       document.getElementById('sistema-principal').style.display = 'none';
+    }
+
+    // ====================== BOLETIM PÚBLICO (somente leitura) ======================
+    function abrirBoletimPublico() {
+      perfilAtual = 'publico';
+      professorLogado = null;
+      document.getElementById('tela-login').style.display = 'none';
+      document.getElementById('sistema-principal').style.display = 'none';
+      document.getElementById('tela-estatisticas').style.display = 'none';
+      document.getElementById('tela-boletim-publico').style.display = 'block';
+      carregarStorage();
+      popularSelectTurmasBoletimPublico();
+      renderBoletimPublico();
+    }
+
+    function sairBoletimPublico() {
+      perfilAtual = null;
+      professorLogado = null;
+      document.getElementById('tela-boletim-publico').style.display = 'none';
+      document.getElementById('tela-login').style.display = 'block';
+    }
+
+    function atualizarBoletimPublico() {
+      if (!estado.appsUrl) {
+        alert('Nuvem não configurada. Os dados mostram apenas o armazenamento local.');
+        return;
+      }
+      const btn = event?.target?.closest('button');
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Atualizando...'; }
+      carregarDaNuvem().then(function (dados) {
+        if (dados) {
+          aplicarDadosNuvem(dados, false); // false = não preservar locais (recarrega tudo da nuvem)
+        }
+        if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar'; }
+      }).catch(function (e) {
+        console.error('Erro ao atualizar:', e);
+        if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar'; }
+        alert('Falha ao recarregar da nuvem: ' + e.message);
+      });
+    }
+
+    function popularSelectTurmasBoletimPublico() {
+      const select = document.getElementById('select-turma-boletim-publico');
+      if (!select) return;
+      const valorAtual = select.value;
+      select.innerHTML = '<option value="">-- Selecione uma turma --</option>';
+      Object.entries(estado.turmas || {}).forEach(([id, turma]) => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = turma.nome;
+        select.appendChild(opt);
+      });
+      if (valorAtual) select.value = valorAtual;
+    }
+
+    function renderBoletimPublico() {
+      const container = document.getElementById('tabela-boletim-publico-container');
+      const turmaId = document.getElementById('select-turma-boletim-publico').value;
+      const btnExportar = document.getElementById('btn-exportar-boletim-publico');
+      if (btnExportar) btnExportar.disabled = !turmaId;
+      const btnExportarPdf = document.getElementById('btn-exportar-boletim-publico-pdf');
+      if (btnExportarPdf) btnExportarPdf.disabled = !turmaId;
+
+      const tituloEl = document.getElementById('boletim-publico-titulo');
+      const atualizadoEl = document.getElementById('boletim-publico-atualizado');
+
+      if (!turmaId) {
+        container.innerHTML = '<div class="empty-state"><div class="emoji">📊</div><p>Selecione uma turma para visualizar o boletim final.</p></div>';
+        if (tituloEl) tituloEl.textContent = 'Selecione uma turma';
+        return;
+      }
+
+      const turma = getTurma(turmaId);
+      if (!turma) { container.innerHTML = '<div class="error-box">Turma não encontrada.</div>'; return; }
+
+      if (tituloEl) tituloEl.textContent = `Boletim Final — ${esc(turma.nome)}`;
+      if (atualizadoEl) atualizadoEl.textContent = new Date().toLocaleString('pt-BR');
+
+      // Reusa a lógica do boletim final, mas força modo somente leitura
+      // O renderBoletimFinal já verifica perfilAtual para editar; como é 'publico', será só leitura
+      // Vou chamar uma versão adaptada inline para evitar conflitos de IDs
+
+      // Disciplinas visíveis = todas
+      const disciplinasVisiveis = (turma.disciplinas || []);
+      if (!turma.conceitosFinais) turma.conceitosFinais = {};
+
+      // Médias da sala (5º conceito por disciplina)
+      const mediaSalaPorDiscBoletim = disciplinasVisiveis.map(disc => {
+        let soma = 0, count = 0;
+        turma.alunos.forEach(aluno => {
+          const n1 = turma.notas?.[1]?.[disc.id]?.[aluno.id];
+          const n2 = turma.notas?.[2]?.[disc.id]?.[aluno.id];
+          const n3 = turma.notas?.[3]?.[disc.id]?.[aluno.id];
+          const n4 = turma.notas?.[4]?.[disc.id]?.[aluno.id];
+          const a1 = (n1 === undefined || n1 === null) ? 0 : Number(n1);
+          const a2 = (n2 === undefined || n2 === null) ? 0 : Number(n2);
+          const a3 = (n3 === undefined || n3 === null) ? 0 : Number(n3);
+          const a4 = (n4 === undefined || n4 === null) ? 0 : Number(n4);
+          const temNota = [n1, n2, n3, n4].some(n => n !== undefined && n !== null);
+          if (!temNota) return;
+          const editado = turma.conceitosFinais?.[aluno.id]?.[disc.id];
+          const med = editado !== undefined && editado !== null ? Number(editado) : (a1 + a2 + a3 + a4) / 4;
+          soma += med; count++;
+        });
+        return count ? Number((soma / count).toFixed(1)) : null;
+      });
+
+      // Média da sala por bimestre por disciplina
+      const mediaSalaBimestreBoletim = [1, 2, 3, 4].map(b => disciplinasVisiveis.map(disc => {
+        let soma = 0, count = 0;
+        turma.alunos.forEach(aluno => {
+          const n = turma.notas?.[b]?.[disc.id]?.[aluno.id];
+          if (n !== undefined && n !== null) { soma += Number(n); count++; }
+        });
+        return count ? Number((soma / count).toFixed(1)) : null;
+      }));
+
+      container.innerHTML = `
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th class="aluno-hdr" rowspan="2" style="background:#1b2740; color:#e6ebf5;">Aluno</th>
+            ${disciplinasVisiveis.map(d => `
+              <th class="disc-col" colspan="8" style="text-align:center; background:#1b2740;">
+                <div class="disc-header-info">
+                  <strong style="color:#e6ebf5;">${esc(d.nome)}</strong>
+                  <small style="color:#8fa0bd;">Prof: ${esc(d.professor)}</small>
+                </div>
+              </th>
+            `).join('')}
+            <th rowspan="2" style="background:#1a237e; color:#e6ebf5; min-width:100px;">Média Geral</th>
+          </tr>
+          <tr>
+            ${disciplinasVisiveis.map(() => `
+              <th style="background:#1b2740; color:#e6ebf5; font-size:10px; padding:5px;">1ºB</th>
+              <th style="background:#1b2740; color:#e6ebf5; font-size:10px; padding:5px;">2ºB</th>
+              <th style="background:#1b2740; color:#e6ebf5; font-size:10px; padding:5px;">3ºB</th>
+              <th style="background:#1b2740; color:#e6ebf5; font-size:10px; padding:5px;">4ºB</th>
+              <th style="background:#143d2e; color:#e6ebf5; font-size:10px; padding:5px;">5º Conceito</th>
+              <th style="background:#3d2a0e; color:#e6ebf5; font-size:10px; padding:5px;">Recuperação</th>
+              <th style="background:#0e2d4d; color:#e6ebf5; font-size:10px; padding:5px;">Freq. (%)</th>
+              <th style="background:#2a1040; color:#e6ebf5; font-size:10px; padding:5px;">Situação Final</th>
+            `).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${turma.alunos.map(aluno => {
+        const mediasAluno = [];
+        const linhaDisciplinas = disciplinasVisiveis.map(disc => {
+          const n1 = turma.notas?.[1]?.[disc.id]?.[aluno.id];
+          const n2 = turma.notas?.[2]?.[disc.id]?.[aluno.id];
+          const n3 = turma.notas?.[3]?.[disc.id]?.[aluno.id];
+          const n4 = turma.notas?.[4]?.[disc.id]?.[aluno.id];
+          // 5º Conceito: nota ausente = 0, denominador fixo 4
+          const v1 = (n1 === undefined || n1 === null) ? 0 : Number(n1);
+          const v2 = (n2 === undefined || n2 === null) ? 0 : Number(n2);
+          const v3 = (n3 === undefined || n3 === null) ? 0 : Number(n3);
+          const v4 = (n4 === undefined || n4 === null) ? 0 : Number(n4);
+          const mediaCalc = (v1 + v2 + v3 + v4) / 4;
+          const notasLancadas = [n1, n2, n3, n4].filter(n => n !== undefined && n !== null);
+          const conceitoFinalSalvo = turma.conceitosFinais?.[aluno.id]?.[disc.id];
+          const conceitoFinalNum = conceitoFinalSalvo !== undefined
+            ? Number(conceitoFinalSalvo)
+            : Number(mediaCalc.toFixed(1));
+          mediasAluno.push(mediaCalc);
+          // Médias de semestre: nota ausente = 0, denominador fixo 2
+          const mediaSem1 = (v1 + v2) / 2;
+          const mediaSem2 = (v3 + v4) / 2;
+          const aprovDisc = classificarAprovacao(conceitoFinalNum);
+          const recDisc = classificarRecuperacao(mediaSem1, mediaSem2);
+          const aprCor = aprovDisc === 'aprovado' ? 'status-aprovado' : (aprovDisc === 'reprovado' ? 'status-reprovado' : '');
+          const recCor = (recDisc === 'rec1' || recDisc === 'rec2' || recDisc === 'rec1+rec2') ? 'status-recuperacao' : '';
+          // Somente leitura: sem inputs editáveis
+          return `
+                <td>${n1 !== undefined ? Number(n1).toFixed(1) : '—'}</td>
+                <td>${n2 !== undefined ? Number(n2).toFixed(1) : '—'}</td>
+                <td>${n3 !== undefined ? Number(n3).toFixed(1) : '—'}</td>
+                <td>${n4 !== undefined ? Number(n4).toFixed(1) : '—'}</td>
+                <td style="background:#143d2e;">
+                  <span title="5º Conceito — média automática dos 4 bimestres"
+                    style="font-weight:700; color:#6ee7b7;">${conceitoFinalNum !== null ? Number(conceitoFinalNum).toFixed(1) : '—'}</span>
+                </td>
+                <td class="${recCor}" style="font-size:11px; padding:4px;">${labelRecuperacao(recDisc)}</td>
+                <td style="font-size:11px; padding:4px; text-align:center;">${getFrequenciaMedia(turma, aluno.id)}</td>
+                <td>
+                  ${(() => {
+            const sit = getSituacaoFinal(turma, aluno.id, disc.id);
+            if (sit) {
+              return `<span style="color:${corSituacaoFinal(sit)}; font-weight:700;">${labelSituacaoFinal(sit)}</span>`;
+            }
+            return '<span style="color:#8fa0bd;">—</span>';
+          })()}
+                </td>
+              `;
+        }).join('');
+        const mediaGeral = mediasAluno.length ? (mediasAluno.reduce((a, b) => a + b, 0) / mediasAluno.length).toFixed(1) : '—';
+        return `
+              <tr style="background:#131c31;">
+                <td class="aluno-cell">${esc(aluno.nome)}</td>
+                ${linhaDisciplinas}
+                <td style="background:#1b2740; font-weight:700; color:#e6ebf5;">${mediaGeral}</td>
+              </tr>
+            `;
+      }).join('')}
+          <tr style="background:#1a233e; font-weight:700;">
+            <td class="aluno-cell" style="background:#162038;">🏫 Média da Sala</td>
+            ${disciplinasVisiveis.map((disc, di) => {
+        const m = mediaSalaPorDiscBoletim[di];
+        const c1 = mediaSalaBimestreBoletim[0][di];
+        const c2 = mediaSalaBimestreBoletim[1][di];
+        const c3 = mediaSalaBimestreBoletim[2][di];
+        const c4 = mediaSalaBimestreBoletim[3][di];
+        const freqMedia = getFrequenciaMediaSalaNum(turma);
+        const sitSala = m !== null ? classificarAprovacao(m) : null;
+        const sitCor = sitSala === 'aprovado' ? 'status-aprovado' : (sitSala === 'reprovado' ? 'status-reprovado' : '');
+        return `
+                <td style="color:#b9c9ff;">${c1 !== null ? c1.toFixed(1) : '—'}</td>
+                <td style="color:#b9c9ff;">${c2 !== null ? c2.toFixed(1) : '—'}</td>
+                <td style="color:#b9c9ff;">${c3 !== null ? c3.toFixed(1) : '—'}</td>
+                <td style="color:#b9c9ff;">${c4 !== null ? c4.toFixed(1) : '—'}</td>
+                <td style="background:#143d2e;"><span style="font-weight:700; color:#6ee7b7;">${m !== null ? m.toFixed(1) : '—'}</span></td>
+                <td class="${sitCor}" style="font-size:11px; padding:4px;">${sitSala ? labelSituacao(sitSala) : '—'}</td>
+                <td style="font-size:11px; padding:4px; text-align:center;">${freqMedia !== null ? freqMedia.toFixed(1) : '—'}</td>
+                <td style="color:${corSituacaoFinal(sitSala ? (sitSala === 'aprovado' ? 'aprovado_nota_freq' : 'reprovado_nota') : null)}; font-weight:700;">${sitSala ? labelSituacaoFinal(sitSala === 'aprovado' ? 'aprovado_nota_freq' : 'reprovado_nota') : '—'}</td>
+              `;
+      }).join('')}
+            <td style="background:#1b2740; color:#e6ebf5; font-weight:700;">${disciplinasVisiveis.length ? (mediaSalaPorDiscBoletim.filter(x => x !== null).reduce((a, b) => a + b, 0) / mediaSalaPorDiscBoletim.filter(x => x !== null).length).toFixed(1) : '—'}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    ${disciplinasVisiveis.length > 1 ? `
+    <div style="margin-top:24px;">
+      <h4 style="color:#b9c9ff; border-bottom:2px solid #5b7cfa; padding-bottom:6px;">🏫 Média da Sala por Bimestre</h4>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th style="background:#1b2740; color:#e6ebf5;">Disciplina</th>
+              <th style="background:#1b2740; color:#e6ebf5;">1º Bimestre</th>
+              <th style="background:#1b2740; color:#e6ebf5;">2º Bimestre</th>
+              <th style="background:#1b2740; color:#e6ebf5;">3º Bimestre</th>
+              <th style="background:#1b2740; color:#e6ebf5;">4º Bimestre</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${disciplinasVisiveis.map((disc, di) => `
+              <tr style="background:#131c31;">
+                <td style="font-weight:600; color:#e6ebf5;">${esc(disc.nome)}</td>
+                <td style="color:#b9c9ff;">${mediaSalaBimestreBoletim[0][di] !== null ? mediaSalaBimestreBoletim[0][di].toFixed(1) : '—'}</td>
+                <td style="color:#b9c9ff;">${mediaSalaBimestreBoletim[1][di] !== null ? mediaSalaBimestreBoletim[1][di].toFixed(1) : '—'}</td>
+                <td style="color:#b9c9ff;">${mediaSalaBimestreBoletim[2][di] !== null ? mediaSalaBimestreBoletim[2][di].toFixed(1) : '—'}</td>
+                <td style="color:#b9c9ff;">${mediaSalaBimestreBoletim[3][di] !== null ? mediaSalaBimestreBoletim[3][di].toFixed(1) : '—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ` : ''}
+      `;
+    }
+
+    // Exportar boletim público para Excel (reusa lógica existente)
+    function exportarBoletimPublicoExcel() {
+      const turmaId = document.getElementById('select-turma-boletim-publico').value;
+      if (!turmaId) { alert('Selecione uma turma primeiro.'); return; }
+      const turma = getTurma(turmaId);
+      if (!turma) return;
+      const disciplinasVisiveis = (turma.disciplinas || []);
+      exportarBoletimExcelInterno(turma, disciplinasVisiveis, true);
+    }
+
+    function exportarBoletimPublicoPDF() {
+      const turmaId = document.getElementById('select-turma-boletim-publico').value;
+      if (!turmaId) { alert('Selecione uma turma primeiro.'); return; }
+      const turma = getTurma(turmaId);
+      if (!turma) return;
+      const disciplinasVisiveis = (turma.disciplinas || []);
+      exportarBoletimPDFInterno(turma, disciplinasVisiveis, true);
     }
 
     function destruirCharts(prefix) {
