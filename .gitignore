@@ -1,0 +1,11 @@
+# Dependências (não são necessárias para rodar o sistema)
+node_modules/
+
+# Artefactos de sistema/edição
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+
+# Backups gerados localmente durante testes
+backup-notas-*.json

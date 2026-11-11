@@ -25,6 +25,312 @@
         });
     }
 
+    // ---------- SENHAS (nunca em texto perto) ----------
+    // SHA-256 síncrono (FIPS 180-4). Usado apenas para que senhas fiquem
+    // guardadas/comparadas como hash (localStorage, nuvem e código-fonte),
+    // nunca em texto puro. Não substitui HTTPS: é proteção local.
+    function rotr32(x, n) { return (x >>> n) | (x << (32 - n)); }
+    function sha256Hex(texto) {
+      const K = new Uint32Array([
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+      ]);
+      const bytes = new TextEncoder().encode(String(texto));
+      const bits = bytes.length * 8;
+      const total = (((bytes.length + 8) >> 6) + 1) * 64;
+      const padded = new Uint8Array(total);
+      padded.set(bytes);
+      padded[bytes.length] = 0x80;
+      const view = new DataView(padded.buffer);
+      view.setUint32(total - 4, bits >>> 0, false);
+      view.setUint32(total - 8, Math.floor(bits / 0x100000000), false);
+      let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+      let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+      const w = new Uint32Array(64);
+      for (let i = 0; i < total; i += 64) {
+        for (let t = 0; t < 16; t++) w[t] = view.getUint32(i + t * 4, false);
+        for (let t = 16; t < 64; t++) {
+          const s0 = rotr32(w[t - 15], 7) ^ rotr32(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+          const s1 = rotr32(w[t - 2], 17) ^ rotr32(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+          w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
+        }
+        let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+        for (let t = 0; t < 64; t++) {
+          const S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+          const ch = (e & f) ^ (~e & g);
+          const temp1 = (h + S1 + ch + K[t] + w[t]) >>> 0;
+          const S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+          const maj = (a & b) ^ (a & c) ^ (b & c);
+          const temp2 = (S0 + maj) >>> 0;
+          h = g; g = f; f = e; e = (d + temp1) >>> 0;
+          d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+        }
+        h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
+        h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
+      }
+      return [h0, h1, h2, h3, h4, h5, h6, h7].map(x => x.toString(16).padStart(8, '0')).join('');
+    }
+
+    // Formato do hash de senha: 'v1:' + sha256hex. O prefixo permite migrar
+    // dados antigos (plaintext) sem ambiguidade e é idempotente.
+    function hashSenha(senha) { return 'v1:' + sha256Hex(String(senha)); }
+    function ehHashSenha(valor) {
+      return typeof valor === 'string' && valor.slice(0, 3) === 'v1:' && /^[0-9a-f]{64}$/.test(valor.slice(3));
+    }
+    // Comparação em tempo constante (evita timing attack trivial).
+    function comparaTexto(a, b) {
+      const x = String(a), y = String(b);
+      let dif = x.length ^ y.length;
+      const n = Math.max(x.length, y.length);
+      for (let i = 0; i < n; i++) dif |= (x.charCodeAt(i % (x.length || 1)) || 0) ^ (y.charCodeAt(i % (y.length || 1)) || 0);
+      return dif === 0;
+    }
+    // Compara a senha digitada com o valor salvo (hash v1: ou texto antigo
+    // ainda não migrado). Regra de negócio inalterada: mesma senha = acesso.
+    function senhaCorreta(senhaDigitada, valorSalvo) {
+      if (valorSalvo === undefined || valorSalvo === null || valorSalvo === '') return false;
+      if (ehHashSenha(valorSalvo)) return comparaTexto(hashSenha(senhaDigitada), valorSalvo);
+      return comparaTexto(String(senhaDigitada), String(valorSalvo));
+    }
+    // Migra senhas em texto puro para hash (idempotente). Aplicado em todo
+    // carregamento de dados: localStorage, nuvem e backup.
+    function normalizarSegredos(alvo) {
+      if (!alvo || typeof alvo !== 'object') return alvo;
+      if (typeof alvo.senhaAdmin === 'string' && alvo.senhaAdmin && !ehHashSenha(alvo.senhaAdmin)) {
+        alvo.senhaAdmin = hashSenha(alvo.senhaAdmin);
+      }
+      const turmas = (alvo.turmas && typeof alvo.turmas === 'object') ? alvo.turmas : {};
+      Object.keys(turmas).forEach(tid => {
+        const t = turmas[tid];
+        if (!t || typeof t !== 'object') return;
+        (Array.isArray(t.disciplinas) ? t.disciplinas : []).forEach(d => {
+          if (d && typeof d.senha === 'string' && d.senha && !ehHashSenha(d.senha)) {
+            d.senha = hashSenha(d.senha);
+          }
+        });
+      });
+      return alvo;
+    }
+
+    // ---------- SANITIZAÇÃO DE DADOS (evita dados corrompidos quebrarem a tela) ----------
+    // Forma permissiva: mantém o que é válido, descarta só o que é impossível
+    // (nota fora de 0–10, valor não numérico, estrutura errada). Não altera regra
+    // de negócio — apenas garante que o estado seja utilizável.
+    function sanitizarEstado(alvo) {
+      if (!alvo || typeof alvo !== 'object' || Array.isArray(alvo)) return alvo;
+      if (!alvo.turmas || typeof alvo.turmas !== 'object' || Array.isArray(alvo.turmas)) alvo.turmas = {};
+      if (!BIMESTRES.includes(Number(alvo.bimestreAtual))) alvo.bimestreAtual = 1;
+      const numEntre = (v, min, max) => {
+        const n = Number(v);
+        return (v !== '' && v !== null && v !== undefined && Number.isFinite(n) && n >= min && n <= max) ? n : null;
+      };
+      Object.keys(alvo.turmas).forEach(tid => {
+        const t = alvo.turmas[tid];
+        if (!t || typeof t !== 'object' || Array.isArray(t)) { delete alvo.turmas[tid]; return; }
+        if (typeof t.nome !== 'string') t.nome = String(t.nome === undefined || t.nome === null ? '' : t.nome);
+        if (!Array.isArray(t.disciplinas)) t.disciplinas = [];
+        if (!Array.isArray(t.alunos)) t.alunos = [];
+        t.disciplinas = t.disciplinas.filter(d => d && typeof d === 'object' && typeof d.id === 'string');
+        t.alunos = t.alunos.filter(a => a && typeof a === 'object' && typeof a.id === 'string');
+        if (!t.notas || typeof t.notas !== 'object') t.notas = {};
+        BIMESTRES.forEach(b => {
+          const porBim = t.notas[b];
+          if (!porBim || typeof porBim !== 'object') { if (t.notas[b]) delete t.notas[b]; return; }
+          Object.keys(porBim).forEach(did => {
+            const porDisc = porBim[did];
+            if (!porDisc || typeof porDisc !== 'object') { delete porBim[did]; return; }
+            Object.keys(porDisc).forEach(aid => {
+              const nota = numEntre(porDisc[aid], 0, 10);
+              if (nota === null) delete porDisc[aid]; else porDisc[aid] = nota;
+            });
+          });
+        });
+        if (!t.frequencias || typeof t.frequencias !== 'object') t.frequencias = {};
+        BIMESTRES.forEach(b => {
+          const porBim = t.frequencias[b];
+          if (!porBim || typeof porBim !== 'object') { if (t.frequencias[b]) delete t.frequencias[b]; return; }
+          Object.keys(porBim).forEach(aid => {
+            const pct = numEntre(porBim[aid], 0, 100);
+            if (pct === null) delete porBim[aid]; else porBim[aid] = pct;
+          });
+        });
+        ['conceitosFinais', 'situacoesFinais'].forEach(chave => {
+          if (!t[chave] || typeof t[chave] !== 'object') t[chave] = {};
+          Object.keys(t[chave]).forEach(aid => {
+            const porAluno = t[chave][aid];
+            if (!porAluno || typeof porAluno !== 'object') { delete t[chave][aid]; return; }
+            Object.keys(porAluno).forEach(did => {
+              if (chave === 'conceitosFinais') {
+                const v = numEntre(porAluno[did], 0, 10);
+                if (v === null) delete porAluno[did]; else porAluno[did] = v;
+              } else if (typeof porAluno[did] !== 'string' || !OPCOES_SITUACAO_FINAL[porAluno[did]]) {
+                delete porAluno[did];
+              }
+            });
+          });
+        });
+      });
+      return alvo;
+    }
+
+    // ---------- NOTIFICAÇÕES (substituem alert bloqueante) ----------
+    let caixaNotificacoes = null;
+    function notificar(mensagem, tipo) {
+      try {
+        if (!document.body) { console.log('[notificação]', mensagem); return; }
+        if (!caixaNotificacoes || !caixaNotificacoes.parentNode) {
+          caixaNotificacoes = document.createElement('div');
+          caixaNotificacoes.id = 'caixa-notificacoes';
+          caixaNotificacoes.className = 'caixa-notificacoes';
+          caixaNotificacoes.setAttribute('aria-live', 'polite');
+          document.body.appendChild(caixaNotificacoes);
+        }
+        const item = document.createElement('div');
+        item.className = 'toast toast-' + (tipo || 'erro');
+        item.setAttribute('role', 'status');
+        item.textContent = String(mensagem);
+        caixaNotificacoes.appendChild(item);
+        const tempo = (tipo === 'sucesso' ? 4500 : 8000);
+        setTimeout(function () {
+          item.classList.add('saindo');
+          setTimeout(function () { if (item.parentNode) item.parentNode.removeChild(item); }, 400);
+        }, tempo);
+        item.addEventListener('click', function () { if (item.parentNode) item.parentNode.removeChild(item); });
+      } catch (e) {
+        console.warn('Falha ao exibir notificação:', e);
+      }
+    }
+
+    // ---------- CONFIRMAÇÃO MODAL (substitui confirm bloqueante) ----------
+    function confirmar(mensagem) {
+      return new Promise(function (resolve) {
+        try {
+          const fundo = document.createElement('div');
+          fundo.className = 'modal-fundo';
+          fundo.setAttribute('role', 'dialog');
+          fundo.setAttribute('aria-modal', 'true');
+          fundo.setAttribute('aria-label', 'Confirmação');
+          const caixa = document.createElement('div');
+          caixa.className = 'modal-caixa';
+          const texto = document.createElement('p');
+          texto.className = 'modal-texto';
+          texto.textContent = String(mensagem);
+          const rodape = document.createElement('div');
+          rodape.className = 'modal-rodape';
+          const btnNao = document.createElement('button');
+          btnNao.type = 'button';
+          btnNao.className = 'btn-secondary';
+          btnNao.textContent = 'Cancelar';
+          const btnSim = document.createElement('button');
+          btnSim.type = 'button';
+          btnSim.className = 'btn-danger';
+          btnSim.textContent = 'Confirmar';
+          rodape.appendChild(btnNao);
+          rodape.appendChild(btnSim);
+          caixa.appendChild(texto);
+          caixa.appendChild(rodape);
+          fundo.appendChild(caixa);
+          document.body.appendChild(fundo);
+          let resolvido = false;
+          function fechar(resultado) {
+            if (resolvido) return;
+            resolvido = true;
+            document.removeEventListener('keydown', aoTeclar, true);
+            if (fundo.parentNode) fundo.parentNode.removeChild(fundo);
+            resolve(resultado);
+          }
+          function aoTeclar(e) {
+            if (e.key === 'Escape') { e.preventDefault(); fechar(false); }
+          }
+          btnNao.addEventListener('click', function () { fechar(false); });
+          btnSim.addEventListener('click', function () { fechar(true); });
+          fundo.addEventListener('click', function (e) { if (e.target === fundo) fechar(false); });
+          document.addEventListener('keydown', aoTeclar, true);
+          btnNao.focus();
+        } catch (e) {
+          console.warn('Falha ao abrir confirmação:', e);
+          resolve(false);
+        }
+      });
+    }
+
+    // ---------- TRAVAS DE TENTATIVA (evita força bruta nos logins) ----------
+    function criarTravaTentativas() {
+      let falhas = 0;
+      let bloqueadoAte = 0;
+      return {
+        podeTentar: function () { return Date.now() >= bloqueadoAte; },
+        restanteMs: function () { return Math.max(0, bloqueadoAte - Date.now()); },
+        // Devolve true quando atingiu o limite e bloqueou por `ms`.
+        registrarFalha: function (limite, ms) {
+          falhas++;
+          if (falhas >= limite) { falhas = 0; bloqueadoAte = Date.now() + ms; return true; }
+          return false;
+        },
+        zerar: function () { falhas = 0; bloqueadoAte = 0; }
+      };
+    }
+
+    // ---------- RENDER AGENDADO (debounce) ----------
+    const timersRender = {};
+    function agendarRender(chave, fn, ms) {
+      if (timersRender[chave]) clearTimeout(timersRender[chave]);
+      timersRender[chave] = setTimeout(function () { delete timersRender[chave]; fn(); }, ms || 200);
+    }
+
+    // ---------- EVENTOS SEM HANDLERS INLINE (CSP sem 'unsafe-inline') ----------
+    // O HTML/geração usa data-fn="nomeDaFuncao" data-args='[...]' e, quando
+    // preciso, data-ev="change|keydown" e data-key="Enter". Os argumentos são
+    // JSON; tokens especiais: @el (o elemento), @value (valor), @event (evento).
+    function interpretarArgs(texto) {
+      try {
+        const arr = JSON.parse(texto || '[]');
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) {
+        console.warn('data-args inválido:', texto);
+        return [];
+      }
+    }
+    function despacharEvento(ev) {
+      let alvo = ev && ev.target;
+      while (alvo && alvo !== document.body) {
+        if (alvo.getAttribute && alvo.getAttribute('data-fn')) {
+          const tipo = alvo.getAttribute('data-ev') || 'click';
+          let combina = (ev.type === tipo);
+          if (!combina && ev.type === 'keydown' && tipo === 'click') {
+            // Elementos não-nativos com role="button" respondem a Enter/Espaço.
+            const tag = String(alvo.tagName || '').toUpperCase();
+            const nativo = tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+            if (!nativo && (ev.key === 'Enter' || ev.key === ' ')) {
+              if (ev.key === ' ') ev.preventDefault();
+              combina = true;
+            }
+          }
+          if (combina) {
+            if (tipo === 'keydown') {
+              const tecla = alvo.getAttribute('data-key');
+              if (tecla && ev.key !== tecla) return;
+            }
+            const nome = alvo.getAttribute('data-fn');
+            const fn = typeof window[nome] === 'function' ? window[nome] : null;
+            if (!fn) { console.warn('data-fn sem função correspondente:', nome); return; }
+            const args = interpretarArgs(alvo.getAttribute('data-args')).map(a =>
+              a === '@el' ? alvo : a === '@value' ? alvo.value : a === '@event' ? ev : a
+            );
+            fn.apply(window, args);
+            return;
+          }
+        }
+        alvo = alvo.parentElement || alvo.parentNode;
+      }
+    }
+
     // Monta a URL de uma chamada à nuvem (ação + chave secreta + anti-cache).
     function urlApps(acao) {
       return estado.appsUrl + '?acao=' + acao + '&chave=' + encodeURIComponent(APPS_CHAVE_SECRETA) + '&_=' + Date.now();
@@ -68,13 +374,20 @@
     function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 9); }
 
     // ---------- PERSISTÊNCIA LOCAL (fallback) ----------
-    function salvarStorageLocal() { localStorage.setItem('sistemaNotasTurmas', JSON.stringify(estado)); }
+    function salvarStorageLocal() {
+      // Migra senhas para hash antes de persistir: nada em texto puro vai para
+      // o localStorage (nem para a nuvem, que recebe o mesmo objeto).
+      normalizarSegredos(estado);
+      localStorage.setItem('sistemaNotasTurmas', JSON.stringify(estado));
+    }
     function carregarStorageLocal() {
       const d = localStorage.getItem('sistemaNotasTurmas');
       if (d) {
-        try { estado = JSON.parse(d); } catch (e) { estado.turmas = {}; }
+        try { estado = JSON.parse(d); } catch (e) { console.warn('localStorage corrompido, reiniciando turmas:', e); estado.turmas = {}; }
         if (typeof estado.senhaAdmin !== 'string') estado.senhaAdmin = 'admin123';
         if (typeof estado.appsUrl !== 'string' || !estado.appsUrl) estado.appsUrl = APPS_URL_PADRAO;
+        sanitizarEstado(estado);
+        normalizarSegredos(estado);
       }
     }
 
@@ -88,6 +401,8 @@
 
     function carregarStorage() {
       carregarStorageLocal();
+      sanitizarEstado(estado);
+      normalizarSegredos(estado);
       if (!estado.appsUrl) estado.appsUrl = APPS_URL_PADRAO; // nuvem embutida no HTML
       estado.modoAdmin = false;
       // Dica de versão deixada por outra aba deste mesmo navegador: evita que o
@@ -96,7 +411,8 @@
       const versaoLocal = Number(localStorage.getItem('sistemaNotasVersao'));
       if (Number.isFinite(versaoLocal) && versaoLocal > 0) estadoVersao = versaoLocal;
       const campoSenha = document.getElementById('input-senha-admin');
-      if (campoSenha) campoSenha.value = estado.senhaAdmin || 'admin123';
+      // Nunca exibir a senha no campo: fica vazio e "em branco = mantém a atual".
+      if (campoSenha) { campoSenha.value = ''; campoSenha.placeholder = 'Deixe em branco para manter a senha atual'; }
       const campoUrl = document.getElementById('input-apps-url');
       if (campoUrl) campoUrl.value = estado.appsUrl || '';
       if (estado.appsUrl) {
@@ -105,7 +421,7 @@
         // (sem isso, uma alteração feita antes da resposta terminar sairia com a
         // versão errada e apareceria "Conflito: outro usuário salvou dados mais recentes").
         // O `true` preserva o que o usuário já teria editado nesse meio-tempo.
-        cargaInicialNuvem = carregarDaNuvem().then(function (d) { aplicarDadosNuvem(d, true); }).catch(function () { });
+        cargaInicialNuvem = carregarDaNuvem().then(function (d) { aplicarDadosNuvem(d, true); }).catch(function (e) { console.warn('Não foi possível carregar dados da nuvem na inicialização:', e); });
       }
     }
 
@@ -132,6 +448,8 @@
           if (typeof estado.senhaAdmin !== 'string') estado.senhaAdmin = senhaAdmin || 'admin123';
           if (typeof estado.appsUrl !== 'string' || !estado.appsUrl) estado.appsUrl = appsUrl || '';
           if (!estado.turmas) estado.turmas = {};
+          sanitizarEstado(estado);
+          normalizarSegredos(estado);
         }
       } catch (e) {
         console.error('Erro ao recarregar dados:', e);
@@ -511,9 +829,11 @@
       estado.appsUrl = appsUrlAtual || estado.appsUrl || '';
       if (typeof estado.senhaAdmin !== 'string' || !estado.senhaAdmin) estado.senhaAdmin = senhaAtual;
       if (!estado.turmas) estado.turmas = {};
+      sanitizarEstado(estado);
+      normalizarSegredos(estado);
       if (pendentes.length) aplicarOpsLocal(pendentes, estado); // reaplica o que o usuário já tinha editado
       const campoSenha = document.getElementById('input-senha-admin');
-      if (campoSenha) campoSenha.value = estado.senhaAdmin || 'admin123';
+      if (campoSenha) { campoSenha.value = ''; campoSenha.placeholder = 'Deixe em branco para manter a senha atual'; }
       const campoUrl = document.getElementById('input-apps-url');
       if (campoUrl) campoUrl.value = estado.appsUrl || '';
       renderAppsStatus(
@@ -590,7 +910,7 @@
       const arquivo = input && input.files && input.files[0];
       if (!arquivo) return;
       const leitor = new FileReader();
-      leitor.onload = function (e) {
+      leitor.onload = async function (e) {
         let conteudo = null;
         try {
           conteudo = JSON.parse(e.target.result);
@@ -604,7 +924,7 @@
           ? conteudo.dados
           : conteudo;
         const totalTurmasBackup = (dadosBackup && dadosBackup.turmas) ? Object.keys(dadosBackup.turmas).length : 'desconhecido';
-        if (!confirm('Restaurar este backup?\n\nATENÇÃO: os dados atuais serão substituídos pelos do arquivo (e a nuvem será regravada com esses dados).\n\nTurmas no backup: ' + totalTurmasBackup)) {
+        if (!(await confirmar('Restaurar este backup?\n\nATENÇÃO: os dados atuais serão substituídos pelos do arquivo (e a nuvem será regravada com esses dados).\n\nTurmas no backup: ' + totalTurmasBackup))) {
           if (input) input.value = '';
           renderBackupStatus('ℹ️ Restauração cancelada. Nenhum dado foi alterado.', 'aviso');
           return;
@@ -620,12 +940,12 @@
     }
 
     // Baixa os dados mais recentes da nuvem (Google Sheets) e os aplica localmente.
-    function restaurarBackupNuvem() {
+    async function restaurarBackupNuvem() {
       if (!estado.appsUrl) {
         renderBackupStatus('❌ Configure a URL do Apps Script antes de restaurar da nuvem.', 'erro');
         return;
       }
-      if (!confirm('Recarregar os dados da nuvem (Google Sheets)?\n\nA versão mais recente da nuvem substituirá o estado exibido agora.')) {
+      if (!(await confirmar('Recarregar os dados da nuvem (Google Sheets)?\n\nA versão mais recente da nuvem substituirá o estado exibido agora.'))) {
         renderBackupStatus('ℹ️ Recarga cancelada. Nenhum dado foi alterado.', 'aviso');
         return;
       }
@@ -657,8 +977,10 @@
       if (typeof estado.senhaAdmin !== 'string' || !estado.senhaAdmin) estado.senhaAdmin = senhaAtual;
       if (!estado.turmas) estado.turmas = {};
       if (!BIMESTRES.includes(Number(estado.bimestreAtual))) estado.bimestreAtual = 1;
+      sanitizarEstado(estado);
+      normalizarSegredos(estado);
       const campoSenha = document.getElementById('input-senha-admin');
-      if (campoSenha) campoSenha.value = estado.senhaAdmin || 'admin123';
+      if (campoSenha) { campoSenha.value = ''; campoSenha.placeholder = 'Deixe em branco para manter a senha atual'; }
       const campoUrl = document.getElementById('input-apps-url');
       if (campoUrl) campoUrl.value = estado.appsUrl || '';
       sincronizarSelectBimestre();
@@ -750,9 +1072,9 @@
     // ====================== TURMAS ======================
     function criarTurma() {
       const nome = document.getElementById('input-turma').value.trim();
-      if (!nome) { alert('Digite o nome da turma!'); return; }
+      if (!nome) { notificar('Digite o nome da turma!'); return; }
       if (Object.values(estado.turmas).some(t => t.nome.toLowerCase() === nome.toLowerCase())) {
-        alert('Já existe uma turma com esse nome!');
+        notificar('Já existe uma turma com esse nome!');
         return;
       }
       const id = genId();
@@ -764,7 +1086,7 @@
 
     function popularDemo() {
       if (Object.values(estado.turmas).some(t => t.nome === '9º Ano A (Demo)')) {
-        alert('A turma demo já existe! Remova-a antes de popular novamente.');
+        notificar('A turma demo já existe! Remova-a antes de popular novamente.');
         return;
       }
       const nomes = [
@@ -878,7 +1200,7 @@
 
       salvarStorage();
       renderAdmin();
-      alert('Turma demo criada com sucesso!\n\n• 20 alunos\n• 4 disciplinas\n• 4 bimestres com notas variadas\n\nAcesse "Estatísticas" ou "Boletim Final" para visualizar.');
+      notificar('Turma demo criada com sucesso!\n\n• 20 alunos\n• 4 disciplinas\n• 4 bimestres com notas variadas\n\nAcesse "Estatísticas" ou "Boletim Final" para visualizar.', 'sucesso');
     }
 
     // ===== Popular dados completos de exemplo (2 turmas) =====
@@ -889,7 +1211,7 @@
     function popularCompleto() {
       const jaExiste = Object.values(estado.turmas).some(t => /\(Exemplo\)$/.test(t.nome || ''));
       if (jaExiste) {
-        alert('As turmas de exemplo já foram criadas!\n\nApague as turmas com o sufixo "(Exemplo)" na lista de turmas antes de popular de novo.');
+        notificar('As turmas de exemplo já foram criadas!\n\nApague as turmas com o sufixo "(Exemplo)" na lista de turmas antes de popular de novo.');
         return;
       }
 
@@ -1013,7 +1335,7 @@
       estado.bimestreAtual = 4;
       salvarStorage();
       renderAdmin();
-      alert('✅ Turmas de exemplo criadas!\n\n' +
+      notificar('✅ Turmas de exemplo criadas!\n\n' +
         '📚 9º Ano A (Exemplo) — 20 alunos\n' +
         '   Matemática e História → João Silve | Português → Maria Lima | Ciências → Carlos Prado\n' +
         '📚 8º Ano B (Exemplo) — 15 alunos\n' +
@@ -1035,16 +1357,23 @@
 
     // ====================== MODO ADMIN DE NOTAS ======================
     function salvarSenhaAdmin() {
-      const novaSenha = document.getElementById('input-senha-admin').value.trim();
-      if (!novaSenha) { alert('A senha não pode ser vazia!'); return; }
-      estado.senhaAdmin = novaSenha;
+      const campo = document.getElementById('input-senha-admin');
+      const novaSenha = campo.value.trim();
+      if (!novaSenha) {
+        // Campo em branco = mantém a senha atual (a senha salva nunca é exibida).
+        notificar('Nenhuma senha nova digitada — a senha atual foi mantida.', 'info');
+        return;
+      }
+      estado.senhaAdmin = hashSenha(novaSenha);
+      campo.value = '';
       salvarStorage();
-      alert('Senha do administrador atualizada com sucesso!');
+      notificar('Senha do administrador atualizada com sucesso!', 'sucesso');
     }
 
-    function removerTurma(turmaId) {
+    async function removerTurma(turmaId) {
       const turma = getTurma(turmaId);
-      if (!confirm(`Remover a turma "${turma.nome}" e todo seu conteúdo?`)) return;
+      if (!turma) return;
+      if (!(await confirmar(`Remover a turma "${turma.nome}" e todo seu conteúdo?`))) return;
       delete estado.turmas[turmaId];
       salvarStorage();
       renderAdmin();
@@ -1061,8 +1390,8 @@
           <label>Nome da Turma</label>
           <input type="text" id="ed-turma-${turmaId}" value="${esc(turma.nome)}">
         </div>
-        <button class="btn-success btn-sm" onclick="salvarTurmaEdit('${turmaId}')">Salvar</button>
-        <button class="btn-danger btn-sm" onclick="renderAdmin()">Cancelar</button>
+        <button class="btn-success btn-sm" data-fn="salvarTurmaEdit" data-args='["${turmaId}"]'>Salvar</button>
+        <button class="btn-danger btn-sm" data-fn="renderAdmin">Cancelar</button>
       </div>
     `;
         document.getElementById(`ed-turma-${turmaId}`).focus();
@@ -1073,15 +1402,15 @@
       const turma = getTurma(turmaId);
       if (!turma) return;
       const nome = document.getElementById(`ed-turma-${turmaId}`).value.trim();
-      if (!nome) { alert('Digite o nome da turma!'); return; }
+      if (!nome) { notificar('Digite o nome da turma!'); return; }
       if (Object.entries(estado.turmas).some(([id, t]) => id !== turmaId && t.nome.toLowerCase() === nome.toLowerCase())) {
-        alert('Já existe uma turma com esse nome!');
+        notificar('Já existe uma turma com esse nome!');
         return;
       }
       turma.nome = nome;
       salvarStorage();
       renderAdmin();
-      alert('Turma atualizada com sucesso!');
+      notificar('Turma atualizada com sucesso!', 'sucesso');
     }
 
     // ====================== DISCIPLINAS ======================
@@ -1093,8 +1422,8 @@
       const prof = profInput.value.trim();
       const senha = senhaInput.value.trim();
 
-      if (!prof) { alert('Digite o nome do professor!'); return; }
-      if (!senha) { alert('Digite a senha do professor!'); return; }
+      if (!prof) { notificar('Digite o nome do professor!'); return; }
+      if (!senha) { notificar('Digite a senha do professor!'); return; }
 
       const discInputs = document.querySelectorAll(`#lista-disc-inputs-${turmaId} .disc-input`);
       const nomesDisc = [];
@@ -1103,7 +1432,7 @@
         if (v) nomesDisc.push(v);
       });
 
-      if (nomesDisc.length === 0) { alert('Adicione pelo menos uma disciplina!'); return; }
+      if (nomesDisc.length === 0) { notificar('Adicione pelo menos uma disciplina!'); return; }
 
       let adicionadas = 0;
       let duplicadas = [];
@@ -1112,7 +1441,7 @@
           duplicadas.push(nome);
           return;
         }
-        turma.disciplinas.push({ id: genId(), nome, professor: prof, senha });
+        turma.disciplinas.push({ id: genId(), nome, professor: prof, senha: hashSenha(senha) });
         adicionadas++;
       });
 
@@ -1125,7 +1454,7 @@
         <div class="form-field" style="flex:1; min-width:200px;">
           <input type="text" class="disc-input" placeholder="Ex: Matemática">
         </div>
-        <button type="button" class="btn-danger btn-sm" onclick="removerDiscInput(this)">−</button>
+        <button type="button" class="btn-danger btn-sm" data-fn="removerDiscInput" data-args='["@el"]'>−</button>
       </div>
     `;
         salvarStorage();
@@ -1135,7 +1464,7 @@
       let msg = '';
       if (adicionadas > 0) msg += `✅ ${adicionadas} disciplina(s) cadastrada(s) para o professor "${prof}".\n`;
       if (duplicadas.length > 0) msg += `⚠️ Já existiam: ${duplicadas.join(', ')}`;
-      if (msg) alert(msg);
+      if (msg) notificar(msg, adicionadas > 0 ? 'sucesso' : 'info');
     }
 
     function adicionarDiscInput(turmaId) {
@@ -1147,7 +1476,7 @@
     <div class="form-field" style="flex:1; min-width:200px;">
       <input type="text" class="disc-input" placeholder="Outra disciplina">
     </div>
-    <button type="button" class="btn-danger btn-sm" onclick="removerDiscInput(this)">−</button>
+    <button type="button" class="btn-danger btn-sm" data-fn="removerDiscInput" data-args='["@el"]'>−</button>
   `;
       lista.appendChild(novaRow);
       novaRow.querySelector('.disc-input').focus();
@@ -1176,9 +1505,9 @@
       }
     }
 
-    function removerDisciplina(turmaId, discId) {
+    async function removerDisciplina(turmaId, discId) {
       const turma = getTurma(turmaId);
-      if (!confirm('Remover disciplina e suas notas?')) return;
+      if (!(await confirmar('Remover disciplina e suas notas?'))) return;
       turma.disciplinas = turma.disciplinas.filter(d => d.id !== discId);
       for (const bim in turma.notas) {
         delete turma.notas[bim][discId];
@@ -1193,20 +1522,20 @@
       const box = document.getElementById(`edit-prof-${grupoId}-${turmaId}`);
       if (!box) return;
 
-      // Buscar todas as disciplinas deste grupo pelo nome do professor no box
-      const profNome = box.closest('tr').previousElementSibling ? null : null;
-      // Precisamos identificar o professor pelo ID do grupo
-      // Vamos guardar o nome do professor em um dataset
-      // Para simplificar, vamos ler o nome do professor da linha correspondente
-      const row = box.closest('tr').previousElementSibling;
-      const profCell = row ? row.querySelector('td:nth-child(2) strong') : null;
-      if (!profCell) return;
-      const profAntigo = profCell.textContent.trim();
+      // Identifica o professor pelo PRÓPRIO grupo (mesma regra do agrupamento:
+      // grupoId = 'g-' + nome sem caracteres especiais). Antes o código lia o
+      // nome da linha anterior no DOM — frágil: qualquer mudança no layout
+      // quebraria a edição ou apontasse para o professor errado.
+      const chaveGrupo = String(grupoId).replace(/^g-/, '').toLowerCase();
+      const primeiro = (turma.disciplinas || []).find(d =>
+        String(d.professor || '').replace(/[^a-z0-9]/gi, '').toLowerCase() === chaveGrupo
+      );
+      if (!primeiro) return;
+      const profAntigo = primeiro.professor;
 
-      // Filtrar disciplinas deste professor (case-insensitive)
-      const discsDoProf = turma.disciplinas.filter(d => d.professor.toLowerCase() === profAntigo.toLowerCase());
+      // Filtrar disciplinas deste professor (case-insensitive, como no agrupamento)
+      const discsDoProf = turma.disciplinas.filter(d => String(d.professor || '').toLowerCase() === String(profAntigo).toLowerCase());
       if (discsDoProf.length === 0) return;
-      const senhaAtual = discsDoProf[0].senha;
       const idsDiscs = discsDoProf.map(d => d.id);
 
       box.innerHTML = `
@@ -1214,12 +1543,16 @@
       <div class="form-row">
         <div class="form-field" style="flex:1; min-width:200px;">
           <label>Nome do Professor</label>
-          <input type="text" id="ed-prof-nome-${grupoId}" value="${profAntigo}">
+          <input type="text" id="ed-prof-nome-${grupoId}" value="${esc(profAntigo)}">
         </div>
         <div class="form-field" style="flex:1; min-width:200px;">
           <label>Senha do Professor</label>
           <div class="senha-vis">
-            <input type="text" id="ed-prof-senha-${grupoId}" value="${esc(senhaAtual)}">
+            <input type="password" id="ed-prof-senha-${grupoId}" autocomplete="new-password"
+              placeholder="Deixe em branco para manter a senha atual">
+            <button type="button" class="toggle-senha" data-fn="toggleSenhaVis"
+              data-args='["ed-prof-senha-${grupoId}", "@el"]'
+              aria-label="Mostrar ou ocultar senha">👁</button>
           </div>
         </div>
       </div>
@@ -1231,15 +1564,15 @@
               <div class="form-field" style="flex:1; min-width:200px;">
                 <input type="text" class="ed-disc-input" value="${esc(d.nome)}">
               </div>
-              <button type="button" class="btn-danger btn-sm" onclick="removerDiscEdit(this)">−</button>
+              <button type="button" class="btn-danger btn-sm" data-fn="removerDiscEdit" data-args='["@el"]'>−</button>
             </div>
           `).join('')}
         </div>
-        <button type="button" class="btn-primary btn-sm" style="margin-top:8px;" onclick="adicionarDiscEdit('${grupoId}')">+ Adicionar outra disciplina</button>
+        <button type="button" class="btn-primary btn-sm" style="margin-top:8px;" data-fn="adicionarDiscEdit" data-args='["${grupoId}"]'>+ Adicionar outra disciplina</button>
       </div>
       <div style="display:flex; gap:8px; margin-top:12px;">
-        <button class="btn-success btn-sm" onclick="salvarProfessorEdit('${turmaId}', '${grupoId}', '${idsDiscs.join(',')}')">Salvar Tudo</button>
-        <button class="btn-danger btn-sm" onclick="renderAdmin()">Cancelar</button>
+        <button class="btn-success btn-sm" data-fn="salvarProfessorEdit" data-args='["${turmaId}", "${grupoId}", "${idsDiscs.join(',')}"]'>Salvar Tudo</button>
+        <button class="btn-danger btn-sm" data-fn="renderAdmin">Cancelar</button>
       </div>
     </div>
   `;
@@ -1254,7 +1587,7 @@
     <div class="form-field" style="flex:1; min-width:200px;">
       <input type="text" class="ed-disc-input" placeholder="Nova disciplina">
     </div>
-    <button type="button" class="btn-danger btn-sm" onclick="removerDiscEdit(this)">−</button>
+    <button type="button" class="btn-danger btn-sm" data-fn="removerDiscEdit" data-args='["@el"]'>−</button>
   `;
       lista.appendChild(novaRow);
       novaRow.querySelector('.ed-disc-input').focus();
@@ -1268,11 +1601,11 @@
       const existingCount = lista.querySelectorAll('.disc-edit-row[data-disc-id]').length;
 
       if (isExisting && existingCount <= 1) {
-        alert('O professor precisa ter pelo menos 1 disciplina! Se quiser remover todas, remova o professor (excluindo cada disciplina).');
+        notificar('O professor precisa ter pelo menos 1 disciplina! Se quiser remover todas, remova o professor (excluindo cada disciplina).');
         return;
       }
       if (lista.querySelectorAll('.disc-edit-row').length <= 1) {
-        alert('O professor precisa ter pelo menos 1 disciplina!');
+        notificar('O professor precisa ter pelo menos 1 disciplina!');
         return;
       }
       // Se for uma disciplina existente, marcar para remoção (não deletar do DOM ainda)
@@ -1290,10 +1623,13 @@
       const idsDiscs = idsDiscsStr.split(',').filter(s => s);
 
       const novoNome = document.getElementById(`ed-prof-nome-${grupoId}`).value.trim();
+      // Em branco = mantém a senha atual (a senha salva nunca é exibida).
       const novaSenha = document.getElementById(`ed-prof-senha-${grupoId}`).value.trim();
 
-      if (!novoNome) { alert('Digite o nome do professor!'); return; }
-      if (!novaSenha) { alert('Digite a senha do professor!'); return; }
+      if (!novoNome) { notificar('Digite o nome do professor!'); return; }
+      const senhaExistente = (turma.disciplinas.find(x => idsDiscs.includes(x.id)) || {}).senha || '';
+      const senhaFinal = novaSenha ? hashSenha(novaSenha) : senhaExistente;
+      if (!senhaFinal) { notificar('Digite a senha do professor!'); return; }
 
       const lista = document.getElementById(`ed-lista-disc-${grupoId}`);
       const rows = lista.querySelectorAll('.disc-edit-row');
@@ -1312,7 +1648,7 @@
       });
 
       if (novosNomes.length === 0) {
-        alert('O professor precisa ter pelo menos 1 disciplina ativa!');
+        notificar('O professor precisa ter pelo menos 1 disciplina ativa!');
         return;
       }
 
@@ -1324,7 +1660,7 @@
         }
       });
       if (duplicatas.length > 0) {
-        alert(`Já existem estas disciplinas na turma: ${duplicatas.join(', ')}`);
+        notificar(`Já existem estas disciplinas na turma: ${duplicatas.join(', ')}`);
         return;
       }
 
@@ -1333,7 +1669,7 @@
         const d = turma.disciplinas.find(x => x.id === id);
         if (d) {
           d.professor = novoNome;
-          d.senha = novaSenha;
+          d.senha = senhaFinal;
         }
       });
 
@@ -1352,7 +1688,7 @@
           if (d) d.nome = v;
         } else {
           // Nova disciplina: criar
-          turma.disciplinas.push({ id: genId(), nome: v, professor: novoNome, senha: novaSenha });
+          turma.disciplinas.push({ id: genId(), nome: v, professor: novoNome, senha: senhaFinal });
         }
       });
 
@@ -1370,7 +1706,7 @@
 
       salvarStorage();
       renderAdmin();
-      alert('Professor atualizado com sucesso!');
+      notificar('Professor atualizado com sucesso!', 'sucesso');
     }
 
     // ====================== ALUNOS ======================
@@ -1378,9 +1714,9 @@
       const turma = getTurma(turmaId);
       const input = document.getElementById(`aluno-${turmaId}`);
       const nome = input.value.trim();
-      if (!nome) { alert('Digite o nome do aluno!'); return; }
+      if (!nome) { notificar('Digite o nome do aluno!'); return; }
       if (turma.alunos.some(a => a.nome.toLowerCase() === nome.toLowerCase())) {
-        alert('Aluno já cadastrado nesta turma!');
+        notificar('Aluno já cadastrado nesta turma!');
         return;
       }
       turma.alunos.push({ id: genId(), nome });
@@ -1413,8 +1749,8 @@
           <label>Nome do Aluno</label>
           <input type="text" id="ed-aluno-${alunoId}" value="${esc(aluno.nome)}">
         </div>
-        <button class="btn-success btn-sm" onclick="salvarAlunoEdit('${turmaId}', '${alunoId}')">Salvar</button>
-        <button class="btn-danger btn-sm" onclick="renderAdmin()">Cancelar</button>
+        <button class="btn-success btn-sm" data-fn="salvarAlunoEdit" data-args='["${turmaId}", "${alunoId}"]'>Salvar</button>
+        <button class="btn-danger btn-sm" data-fn="renderAdmin">Cancelar</button>
       </div>
     `;
       }
@@ -1425,20 +1761,25 @@
       const aluno = turma.alunos.find(a => a.id === alunoId);
       if (!aluno) return;
       const nome = document.getElementById(`ed-aluno-${alunoId}`).value.trim();
-      if (!nome) { alert('Digite o nome do aluno!'); return; }
+      if (!nome) { notificar('Digite o nome do aluno!'); return; }
       if (turma.alunos.some(a => a.id !== alunoId && a.nome.toLowerCase() === nome.toLowerCase())) {
-        alert('Já existe um aluno com esse nome nesta turma!');
+        notificar('Já existe um aluno com esse nome nesta turma!');
         return;
       }
       aluno.nome = nome;
       salvarStorage();
       renderAdmin();
-      alert('Aluno atualizado com sucesso!');
+      notificar('Aluno atualizado com sucesso!', 'sucesso');
     }
 
     function importarPlanilha(turmaId, event) {
       const file = event.target.files[0];
       if (!file) return;
+      if (typeof XLSX === 'undefined') {
+        notificar('A biblioteca para ler planilhas não pôde ser carregada. Verifique sua conexão.');
+        event.target.value = '';
+        return;
+      }
       const turma = getTurma(turmaId);
 
       const reader = new FileReader();
@@ -1462,16 +1803,20 @@
 
           salvarStorage();
           renderAdmin();
-          alert(`Importação concluída!\n✅ ${add} aluno(s) adicionado(s)\n⚠️ ${skip} ignorado(s) (já cadastrados)`);
+          notificar(`Importação concluída!\n✅ ${add} aluno(s) adicionado(s)\n⚠️ ${skip} ignorado(s) (já cadastrados)`, 'sucesso');
           event.target.value = '';
         } catch (err) {
-          alert('Erro ao ler planilha: ' + err.message);
+          notificar('Erro ao ler planilha: ' + err.message);
         }
       };
       reader.readAsArrayBuffer(file);
     }
 
     function baixarTemplateAlunos() {
+      if (typeof XLSX === 'undefined') {
+        notificar('A biblioteca para gerar planilhas não pôde ser carregada. Verifique sua conexão.');
+        return;
+      }
       const dados = [
         ['Nome'],
         ['Ana Silva'],
@@ -1502,8 +1847,8 @@
         <h3>${esc(turma.nome)}</h3>
         <div style="display:flex; gap:8px; align-items:center;">
           <span class="turma-badge">${turma.alunos.length} alunos | ${turma.disciplinas.length} disciplinas</span>
-          <button class="btn-primary btn-sm" onclick="editarTurmaForm('${turmaId}')">Editar Turma</button>
-          <button class="btn-danger btn-sm" onclick="removerTurma('${turmaId}')">Excluir Turma</button>
+          <button class="btn-primary btn-sm" data-fn="editarTurmaForm" data-args='["${turmaId}"]'>Editar Turma</button>
+          <button class="btn-danger btn-sm" data-fn="removerTurma" data-args='["${turmaId}"]'>Excluir Turma</button>
         </div>
       </div>
       <div id="edit-turma-${turmaId}"></div>
@@ -1520,7 +1865,8 @@
             <label>Senha do Professor</label>
             <div class="senha-vis">
               <input type="password" id="senha-${turmaId}" placeholder="Senha para acesso">
-              <button type="button" class="toggle-senha" onclick="toggleSenhaVis('senha-${turmaId}', this)">👁</button>
+              <button type="button" class="toggle-senha" data-fn="toggleSenhaVis" data-args='["senha-${turmaId}", "@el"]'
+                aria-label="Mostrar ou ocultar senha">👁</button>
             </div>
           </div>
         </div>
@@ -1531,12 +1877,12 @@
               <div class="form-field" style="flex:1; min-width:200px;">
                 <input type="text" class="disc-input" placeholder="Ex: Matemática">
               </div>
-              <button type="button" class="btn-danger btn-sm" onclick="removerDiscInput(this)">−</button>
+              <button type="button" class="btn-danger btn-sm" data-fn="removerDiscInput" data-args='["@el"]'>−</button>
             </div>
           </div>
-          <button type="button" class="btn-primary btn-sm" style="margin-top:8px;" onclick="adicionarDiscInput('${turmaId}')">+ Adicionar outra disciplina</button>
+          <button type="button" class="btn-primary btn-sm" style="margin-top:8px;" data-fn="adicionarDiscInput" data-args='["${turmaId}"]'>+ Adicionar outra disciplina</button>
         </div>
-        <button class="btn-success" style="margin-top:12px;" onclick="adicionarDisciplina('${turmaId}')">Cadastrar Professor + Disciplinas</button>
+        <button class="btn-success" style="margin-top:12px;" data-fn="adicionarDisciplina" data-args='["${turmaId}"]'>Cadastrar Professor + Disciplinas</button>
       </div>
 
       ${turma.disciplinas.length === 0 ? '<p style="color:#999; font-size:13px;">Nenhuma disciplina cadastrada.</p>' : `
@@ -1557,11 +1903,11 @@
               return `
                     <tr>
                       <td style="text-align:left; padding-left:15px;">
-                        ${g.discs.map(d => `<div style="padding:2px 0;">• <strong>${esc(d.nome)}</strong> <button class="btn-danger btn-sm" style="font-size:9px; padding:1px 6px; margin-left:5px;" onclick="removerDisciplina('${turmaId}', '${d.id}')" title="Remover esta disciplina">×</button></div>`).join('')}
+                        ${g.discs.map(d => `<div style="padding:2px 0;">• <strong>${esc(d.nome)}</strong> <button class="btn-danger btn-sm" style="font-size:9px; padding:1px 6px; margin-left:5px;" data-fn="removerDisciplina" data-args='["${turmaId}", "${d.id}"]' title="Remover esta disciplina">×</button></div>`).join('')}
                       </td>
                       <td><strong>${esc(g.professor)}</strong></td>
                       <td>
-                        <button class="btn-primary btn-sm" onclick="editarProfessorForm('${turmaId}', '${grupoId}')">Editar Professor</button>
+                        <button class="btn-primary btn-sm" data-fn="editarProfessorForm" data-args='["${turmaId}", "${grupoId}"]'>Editar Professor</button>
                       </td>
                     </tr>
                     <tr><td colspan="3" style="padding:0;"><div id="edit-prof-${grupoId}-${turmaId}"></div></td></tr>
@@ -1581,14 +1927,14 @@
         <div class="form-field" style="flex:1; min-width:250px;">
           <label>Nome do Aluno</label>
           <input type="text" id="aluno-${turmaId}" placeholder="Nome do aluno"
-            onkeypress="if(event.key==='Enter') adicionarAluno('${turmaId}')">
+            data-fn="adicionarAluno" data-ev="keydown" data-key="Enter" data-args='["${turmaId}"]'>
         </div>
-        <button class="btn-success" onclick="adicionarAluno('${turmaId}')">Adicionar</button>
+        <button class="btn-success" data-fn="adicionarAluno" data-args='["${turmaId}"]'>Adicionar</button>
         <div class="form-field">
           <label>Ou importar planilha (CSV/XLSX)</label>
           <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-            <button type="button" class="btn-secondary btn-sm" onclick="baixarTemplateAlunos()" title="Baixar modelo de planilha">📄 Baixar Template</button>
-            <input type="file" accept=".csv,.xlsx,.xls" onchange="importarPlanilha('${turmaId}', event)">
+            <button type="button" class="btn-secondary btn-sm" data-fn="baixarTemplateAlunos" title="Baixar modelo de planilha">📄 Baixar Template</button>
+            <input type="file" accept=".csv,.xlsx,.xls" data-fn="importarPlanilha" data-ev="change" data-args='["${turmaId}", "@event"]'>
           </div>
           <small style="color:#666; font-size:11px; display:block; margin-top:4px;">Coluna obrigatória: <b>Nome</b></small>
         </div>
@@ -1604,8 +1950,8 @@
                   <td style="text-align:left; padding-left:15px;">${esc(a.nome)}</td>
                   <td>
                     <div style="display:flex; gap:6px; justify-content:center;">
-                      <button class="btn-primary btn-sm" onclick="editarAlunoForm('${turmaId}', '${a.id}')">Editar</button>
-                      <button class="btn-danger btn-sm" onclick="removerAluno('${turmaId}', '${a.id}')">Remover</button>
+                      <button class="btn-primary btn-sm" data-fn="editarAlunoForm" data-args='["${turmaId}", "${a.id}"]'>Editar</button>
+                      <button class="btn-danger btn-sm" data-fn="removerAluno" data-args='["${turmaId}", "${a.id}"]'>Remover</button>
                     </div>
                   </td>
                 </tr>
@@ -1664,13 +2010,13 @@
 
       const nota = parseFloat(valor);
       if (isNaN(nota)) {
-        alert('Nota inválida! Digite um número entre 0 e 10.');
+        notificar('Nota inválida! Digite um número entre 0 e 10.');
         if (callbackRender) callbackRender();
         return { valido: false };
       }
 
       if (nota < 0 || nota > 10) {
-        alert('A nota deve ser entre 0 e 10!');
+        notificar('A nota deve ser entre 0 e 10!');
         if (callbackRender) callbackRender();
         return { valido: false };
       }
@@ -1678,7 +2024,7 @@
       if (!Number.isInteger(nota)) {
         const notaBaixo = Math.floor(nota);
         const notaCima = Math.ceil(nota);
-        alert(`⚠️ A nota deve ser um número INTEIRO entre 0 e 10.\n\nVocê digitou: ${nota}\n\nArredonde manualmente:\n  → Para baixo: ${notaBaixo}\n  → Para cima: ${notaCima}\n\nA nota NÃO foi salva. Digite um número inteiro.`);
+        notificar(`⚠️ A nota deve ser um número INTEIRO entre 0 e 10.\n\nVocê digitou: ${nota}\n\nArredonde manualmente:\n  → Para baixo: ${notaBaixo}\n  → Para cima: ${notaCima}\n\nA nota NÃO foi salva. Digite um número inteiro.`);
         if (callbackRender) callbackRender();
         return { valido: false };
       }
@@ -1801,9 +2147,10 @@
             return `
                       <td>
                         <input type="number" class="nota-input" min="0" max="10" step="1"
-                          value="${nota !== undefined ? nota : ''}"
+                          value="${nota !== undefined ? esc(nota) : ''}"
                           placeholder="0-10"
-                          onchange="salvarNotaAdminMultiBim('${turmaId}', '${d.id}', '${aluno.id}', ${b}, this.value)">
+                          data-fn="salvarNotaAdminMultiBim" data-ev="change"
+                          data-args='["${turmaId}", "${d.id}", "${aluno.id}", ${b}, "@value"]'>
                       </td>
                     `;
           }).join('');
@@ -1858,9 +2205,10 @@
               return `
                         <td>
                           <input type="number" class="nota-input" min="0" max="10" step="1"
-                            value="${nota !== undefined ? nota : ''}"
+                            value="${nota !== undefined ? esc(nota) : ''}"
                             placeholder="0-10"
-                            onchange="salvarNota('${turmaId}', '${d.id}', '${aluno.id}', this.value)">
+                            data-fn="salvarNota" data-ev="change"
+                            data-args='["${turmaId}", "${d.id}", "${aluno.id}", "@value"]'>
                         </td>
                       `;
             } else {
@@ -2070,37 +2418,92 @@
     let perfilAtual = null; // 'admin' ou 'professor'
     let professorLogado = null; // { nome, disciplinas: [discId, ...] }
 
-    function entrarComoAdmin() {
-      // Recarregar dados do localStorage para garantir que o admin
-      // veja as últimas alterações feitas pelo professor
-      recarregarDados();
+    // ---------- LOGIN EM FORMULÁRIO (substitui prompt()/alert bloqueantes) ----------
+    // Foca um campo (usado para pular do nome para a senha no login do professor).
+    function focarCampo(idCampo) {
+      const el = document.getElementById(idCampo);
+      if (el) el.focus();
+    }
+    // As regras de acesso continuam as mesmas: admin usa a senha configurada;
+    // professor usa o NOME cadastrado + senha de qualquer uma de suas disciplinas.
+    const travaLoginAdmin = criarTravaTentativas();
+    const travaLoginProfessor = criarTravaTentativas();
 
-      const senha = prompt('Digite a senha do administrador:');
-      if (senha === null) return;
-      // Compara apenas com a senha configurada (o fallback fixo 'admin123'
-      // era uma brecha: continuava funcionando mesmo após trocar a senha).
-      if (senha !== estado.senhaAdmin) {
-        alert('Senha incorreta!');
+    function mostrarErroLogin(idEl, mensagem) {
+      const el = document.getElementById(idEl);
+      if (!el) return;
+      el.textContent = mensagem || '';
+      el.hidden = !mensagem;
+    }
+    function esconderFormsLogin() {
+      ['form-login-admin', 'form-login-professor'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.hidden = true;
+      });
+      mostrarErroLogin('erro-login-admin', '');
+      mostrarErroLogin('erro-login-professor', '');
+    }
+    function abrirLoginAdmin() {
+      esconderFormsLogin();
+      const form = document.getElementById('form-login-admin');
+      if (form) form.hidden = false;
+      const campo = document.getElementById('input-senha-admin-login');
+      if (campo) { campo.value = ''; campo.focus(); }
+    }
+    function abrirLoginProfessor() {
+      esconderFormsLogin();
+      const form = document.getElementById('form-login-professor');
+      if (form) form.hidden = false;
+      const campoNome = document.getElementById('input-nome-professor');
+      if (campoNome) { campoNome.value = ''; campoNome.focus(); }
+      const campoSenha = document.getElementById('input-senha-professor');
+      if (campoSenha) campoSenha.value = '';
+    }
+
+    function enviarLoginAdmin() {
+      recarregarDados();
+      const campo = document.getElementById('input-senha-admin-login');
+      const senha = campo ? campo.value : '';
+      if (!travaLoginAdmin.podeTentar()) {
+        mostrarErroLogin('erro-login-admin', 'Aguarde ' + Math.ceil(travaLoginAdmin.restanteMs() / 1000) + 's antes de tentar novamente.');
         return;
       }
+      // Compara apenas com a senha configurada (o fallback fixo 'admin123'
+      // era uma brecha: continuava funcionando mesmo após trocar a senha).
+      if (!senhaCorreta(senha, estado.senhaAdmin)) {
+        const bloqueou = travaLoginAdmin.registrarFalha(3, 5000);
+        mostrarErroLogin('erro-login-admin', bloqueou
+          ? 'Senha incorreta. Muitas tentativas: aguarde 5 segundos.'
+          : 'Senha incorreta!');
+        if (campo) campo.value = '';
+        return;
+      }
+      travaLoginAdmin.zerar();
+      if (campo) campo.value = '';
+      esconderFormsLogin();
       perfilAtual = 'admin';
       mostrarSistema();
     }
 
-    function entrarComoProfessor() {
-      // Recarregar dados do localStorage para garantir que o professor
-      // veja as últimas alterações feitas pelo admin (ou por ele mesmo)
+    function enviarLoginProfessor() {
       recarregarDados();
-
-      const nome = prompt('Digite seu nome de professor:');
-      if (nome === null || !nome.trim()) return;
+      const campoNome = document.getElementById('input-nome-professor');
+      const campoSenha = document.getElementById('input-senha-professor');
+      const nome = campoNome ? campoNome.value.trim() : '';
+      const senha = campoSenha ? campoSenha.value : '';
+      if (!travaLoginProfessor.podeTentar()) {
+        mostrarErroLogin('erro-login-professor', 'Aguarde ' + Math.ceil(travaLoginProfessor.restanteMs() / 1000) + 's antes de tentar novamente.');
+        return;
+      }
+      if (!nome) { mostrarErroLogin('erro-login-professor', 'Digite seu nome de professor.'); return; }
+      if (!senha) { mostrarErroLogin('erro-login-professor', 'Digite sua senha.'); return; }
 
       // Buscar todas as disciplinas do professor em todas as turmas
       const disciplinasProfessor = [];
       Object.entries(estado.turmas).forEach(([turmaId, turma]) => {
         if (!turma.disciplinas) return;
         turma.disciplinas.forEach(disc => {
-          if (disc.professor && disc.professor.toLowerCase().trim() === nome.trim().toLowerCase()) {
+          if (disc.professor && disc.professor.toLowerCase().trim() === nome.toLowerCase()) {
             disciplinasProfessor.push({
               turmaId,
               turmaNome: turma.nome,
@@ -2113,25 +2516,29 @@
       });
 
       if (disciplinasProfessor.length === 0) {
-        alert('Nenhuma disciplina encontrada para esse nome de professor!\n\nVerifique se o nome está cadastrado corretamente nas turmas.');
+        const bloqueou = travaLoginProfessor.registrarFalha(3, 5000);
+        mostrarErroLogin('erro-login-professor', (bloqueou ? 'Aguarde 5 segundos antes de tentar novamente.\n\n' : '') +
+          'Nenhuma disciplina encontrada para esse nome de professor!\n\nVerifique se o nome está cadastrado corretamente nas turmas.');
         return;
       }
 
-      // Listar disciplinas encontradas
+      // Listar disciplinas encontradas (mesma mensagem do fluxo antigo)
       const listaDisc = disciplinasProfessor.map(d => `- ${d.discNome} (${d.turmaNome})`).join('\n');
 
-      // Verificar senha
-      const senha = prompt(`Disciplinas encontradas:\n${listaDisc}\n\nDigite sua senha:`);
-      if (senha === null) return;
-
-      const senhaLimpa = senha.trim();
-      const senhaValida = disciplinasProfessor.some(d => d.senha === senhaLimpa);
+      // Verificar senha (mesma regra: vale a senha de QUALQUER disciplina dele)
+      const senhaValida = disciplinasProfessor.some(d => senhaCorreta(senha, d.senha));
       if (!senhaValida) {
         // Por segurança, NÃO exibir as senhas na mensagem de erro.
-        alert('Senha incorreta!\n\nSuas disciplinas encontradas:\n' + listaDisc + '\n\nSe esqueceu a senha, solicite ao administrador.');
+        const bloqueou = travaLoginProfessor.registrarFalha(3, 5000);
+        mostrarErroLogin('erro-login-professor', (bloqueou ? 'Senha incorreta. Muitas tentativas: aguarde 5 segundos.\n\n' : 'Senha incorreta!\n\n') +
+          'Suas disciplinas encontradas:\n' + listaDisc + '\n\nSe esqueceu a senha, solicite ao administrador.');
+        if (campoSenha) campoSenha.value = '';
         return;
       }
 
+      travaLoginProfessor.zerar();
+      if (campoSenha) campoSenha.value = '';
+      esconderFormsLogin();
       perfilAtual = 'professor';
       professorLogado = {
         nome: nome.trim(),
@@ -2140,9 +2547,12 @@
       mostrarSistema();
     }
 
+    // (substituído por enviarLoginProfessor — login em formulário, sem prompt)
+
     function sair() {
       perfilAtual = null;
       professorLogado = null;
+      esconderFormsLogin();
       document.getElementById('tela-estatisticas').style.display = 'none';
       document.getElementById('tela-login').style.display = 'block';
       document.getElementById('sistema-principal').style.display = 'none';
@@ -2188,11 +2598,11 @@
         infoUsuario.innerHTML = '<span style="color:#1a237e; font-weight:700;">👑 Administrador</span>';
         tabsContainer.innerHTML = `
       <div class="tabs">
-        <button class="tab active" onclick="mudarAba('admin')">Turmas</button>
-        <button class="tab" onclick="mudarAba('notas')">Lançar Notas</button>
-        <button class="tab" onclick="mudarAba('frequencias')">Frequências</button>
-        <button class="tab" onclick="mudarAba('boletim')">Boletim Final</button>
-        <button class="tab" onclick="mudarAba('estatisticas')">📊 Estatísticas</button>
+        <button class="tab active" data-fn="mudarAba" data-args='["admin"]'>Turmas</button>
+        <button class="tab" data-fn="mudarAba" data-args='["notas"]'>Lançar Notas</button>
+        <button class="tab" data-fn="mudarAba" data-args='["frequencias"]'>Frequências</button>
+        <button class="tab" data-fn="mudarAba" data-args='["boletim"]'>Boletim Final</button>
+        <button class="tab" data-fn="mudarAba" data-args='["estatisticas"]'>📊 Estatísticas</button>
       </div>
     `;
         mudarAba('admin');
@@ -2200,11 +2610,11 @@
         infoUsuario.innerHTML = `<span style="color:#2e7d32; font-weight:700;">📚 ${esc(professorLogado.nome)}</span>`;
         tabsContainer.innerHTML = `
       <div class="tabs">
-        <button class="tab active" onclick="mudarAba('notas')">Lançar Notas</button>
-        <button class="tab" onclick="mudarAba('frequencias')">Frequências</button>
-        <button class="tab" onclick="mudarAba('boletim')">Boletim Final</button>
-        <button class="tab" onclick="mudarAba('conceito')">5º Conceito</button>
-        <button class="tab" onclick="mudarAba('estatisticas')">📊 Estatísticas</button>
+        <button class="tab active" data-fn="mudarAba" data-args='["notas"]'>Lançar Notas</button>
+        <button class="tab" data-fn="mudarAba" data-args='["frequencias"]'>Frequências</button>
+        <button class="tab" data-fn="mudarAba" data-args='["boletim"]'>Boletim Final</button>
+        <button class="tab" data-fn="mudarAba" data-args='["conceito"]'>5º Conceito</button>
+        <button class="tab" data-fn="mudarAba" data-args='["estatisticas"]'>📊 Estatísticas</button>
       </div>
     `;
         mudarAba('notas');
@@ -2255,7 +2665,7 @@
       }
       const num = Number(valor);
       if (isNaN(num) || num < 0 || num > 100) {
-        alert('Frequência deve ser um valor entre 0 e 100 (%).');
+        notificar('Frequência deve ser um valor entre 0 e 100 (%).');
         return;
       }
       turma.frequencias[bimestre][alunoId] = num;
@@ -2391,12 +2801,13 @@
         return `
                   <td style="text-align:center;">
                     <input type="number" class="nota-input freq-in" min="0" max="100" step="1"
-                      value="${pct}"
+                      value="${esc(pct)}"
                       placeholder="%"
                       autocomplete="off"
                       title="Frequência do ${b}º bimestre (0 a 100)"
                       style="${estiloFrequencia(pct)}"
-                      onchange="salvarFrequencia('${turmaId}', ${b}, '${aluno.id}', this.value)">
+                      data-fn="salvarFrequencia" data-ev="change"
+                      data-args='["${turmaId}", ${b}, "${aluno.id}", "@value"]'>
                     <small style="color:${corFrequencia(classificarFrequencia(pct))}; font-size:10px;">${labelFrequencia(classificarFrequencia(pct))}</small>
                   </td>
                 `;
@@ -2656,11 +3067,12 @@
                       const corBorda = perfilAtual === 'admin' ? '#2e7d32' : '#e65100';
                       return `
                         <input type="number" class="nota-input" min="0" max="10" step="1"
-                          value="${conceitoFinalNum !== null ? conceitoFinalNum : ''}"
+                          value="${conceitoFinalNum !== null ? esc(conceitoFinalNum) : ''}"
                           placeholder="0-10"
                           title="${titulo}"
                           style="background:#fff3cd; border-color:${corBorda};"
-                          onchange="salvarConceitoFinal('${turmaId}', '${aluno.id}', '${disc.id}', this.value)">
+                          data-fn="salvarConceitoFinal" data-ev="change"
+                          data-args='["${turmaId}", "${aluno.id}", "${disc.id}", "@value"]'>
                       `;
                     } else {
                       return `
@@ -2678,7 +3090,8 @@
                     if (perfilAtual === 'professor' && professorLogado && isMinhaDisciplina) {
                       // Disciplina do professor: dropdown editável
                       return `
-                        <select class="nota-input" style="width:140px; font-size:11px;" onchange="salvarSituacaoFinal('${turmaId}', '${aluno.id}', '${disc.id}', this.value)">
+                        <select class="nota-input" style="width:140px; font-size:11px;" data-fn="salvarSituacaoFinal" data-ev="change"
+                          data-args='["${turmaId}", "${aluno.id}", "${disc.id}", "@value"]'>
                           <option value="">Selecione</option>
                           <option value="aprovado_nota_freq" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'aprovado_nota_freq' ? 'selected' : ''}>Aprovado por nota e frequência</option>
                           <option value="aprovado_conselho" ${getSituacaoFinal(turma, aluno.id, disc.id) === 'aprovado_conselho' ? 'selected' : ''}>Aprovado pelo conselho</option>
@@ -2792,7 +3205,7 @@
       const btn = document.getElementById('btn-exportar-boletim');
       if (!turmaId) {
         if (btn) btn.disabled = true;
-        alert('Selecione uma turma para exportar o boletim.');
+        notificar('Selecione uma turma para exportar o boletim.');
         return;
       }
       const turma = getTurma(turmaId);
@@ -2806,7 +3219,7 @@
           .map(d => d.discId);
         disciplinasVisiveis = (turma.disciplinas || []).filter(d => discIdsProfessor.includes(d.id));
         if (disciplinasVisiveis.length === 0) {
-          alert('O professor ' + professorLogado.nome + ' não possui disciplinas nesta turma.');
+          notificar('O professor ' + professorLogado.nome + ' não possui disciplinas nesta turma.');
           return;
         }
       }
@@ -2820,7 +3233,7 @@
       const btn = document.getElementById('btn-exportar-boletim-pdf');
       if (!turmaId) {
         if (btn) btn.disabled = false;
-        alert('Selecione uma turma para exportar o boletim.');
+        notificar('Selecione uma turma para exportar o boletim.');
         return;
       }
       const turma = getTurma(turmaId);
@@ -2834,7 +3247,7 @@
         autoTableDisponivel = typeof probe.autoTable === 'function';
       } catch (e) { autoTableDisponivel = false; }
       if (!jsPDF || !autoTableDisponivel) {
-        alert('A biblioteca de PDF não pôde ser carregada. Verifique sua conexão.');
+        notificar('A biblioteca de PDF não pôde ser carregada. Verifique sua conexão.');
         return;
       }
 
@@ -2848,7 +3261,7 @@
           .map(x => x.discId);
         disc = disc.filter(d => discIdsProfessor.includes(d.id));
         if (disc.length === 0) {
-          alert('O professor ' + professorLogado.nome + ' não possui disciplinas nesta turma.');
+          notificar('O professor ' + professorLogado.nome + ' não possui disciplinas nesta turma.');
           if (btn) { btn.disabled = false; btn.textContent = '🖨️ Exportar em PDF'; }
           return;
         }
@@ -2862,7 +3275,7 @@
     // Exporta boletim para Excel recebendo a turma e disciplinas diretamente (usado pelo admin e público)
     function exportarBoletimExcelInterno(turma, disciplinasVisiveis, isPublico = false) {
       if (typeof XLSX === 'undefined') {
-        alert('A biblioteca para exportar Excel não pôde ser carregada. Verifique sua conexão.');
+        notificar('A biblioteca para exportar Excel não pôde ser carregada. Verifique sua conexão.');
         return;
       }
 
@@ -3024,7 +3437,7 @@
         autoTableDisponivel = typeof probe.autoTable === 'function';
       } catch (e) { autoTableDisponivel = false; }
       if (!jsPDF || !autoTableDisponivel) {
-        alert('A biblioteca de PDF não pôde ser carregada. Verifique sua conexão.');
+        notificar('A biblioteca de PDF não pôde ser carregada. Verifique sua conexão.');
         return;
       }
 
@@ -3346,6 +3759,8 @@
     // ====================== ACESSO RESTRITO (somente desenvolvedor) ======================
     const SENHA_ACESSO_RESTRITO = 'a%0gLKYG5igitOu6qrkG';
 
+    const travaAcessoRestrito = criarTravaTentativas();
+
     function abrirAcessoRestrito() {
       document.getElementById('tela-login').style.display = 'none';
       document.getElementById('sistema-principal').style.display = 'none';
@@ -3356,27 +3771,39 @@
       document.getElementById('restrito-login-form').style.display = 'block';
       document.getElementById('restrito-content').style.display = 'none';
       document.getElementById('input-senha-restrito').value = '';
+      mostrarErroLogin('erro-restrito', '');
       document.getElementById('input-senha-restrito').focus();
     }
 
     function validarAcessoRestrito() {
-      const senha = document.getElementById('input-senha-restrito').value;
-      if (senha === SENHA_ACESSO_RESTRITO) {
+      const campo = document.getElementById('input-senha-restrito');
+      const senha = campo ? campo.value : '';
+      if (!travaAcessoRestrito.podeTentar()) {
+        mostrarErroLogin('erro-restrito', 'Aguarde ' + Math.ceil(travaAcessoRestrito.restanteMs() / 1000) + 's antes de tentar novamente.');
+        return;
+      }
+      // Mesma senha de sempre; a trava limita tentativas (evita força bruta).
+      if (senhaCorreta(senha, SENHA_ACESSO_RESTRITO)) {
+        travaAcessoRestrito.zerar();
+        mostrarErroLogin('erro-restrito', '');
         document.getElementById('restrito-login-form').style.display = 'none';
         document.getElementById('restrito-content').style.display = 'block';
         // Carregar URL atual da nuvem no input
         const campoUrl = document.getElementById('input-apps-url');
         if (campoUrl) campoUrl.value = estado.appsUrl || '';
       } else {
-        alert('Senha incorreta. Acesso negado.');
-        document.getElementById('input-senha-restrito').value = '';
-        document.getElementById('input-senha-restrito').focus();
+        const bloqueou = travaAcessoRestrito.registrarFalha(5, 60000);
+        mostrarErroLogin('erro-restrito', bloqueou
+          ? 'Senha incorreta. Acesso negado — aguarde 60 segundos.'
+          : 'Senha incorreta. Acesso negado.');
+        if (campo) { campo.value = ''; campo.focus(); }
       }
     }
 
     function sairAcessoRestrito() {
       document.getElementById('tela-acesso-restrito').style.display = 'none';
       document.getElementById('tela-login').style.display = 'block';
+      esconderFormsLogin();
     }
 
     function abrirEstatisticas() {
@@ -3393,6 +3820,7 @@
       document.getElementById('tela-estatisticas').style.display = 'none';
       document.getElementById('tela-login').style.display = 'block';
       document.getElementById('sistema-principal').style.display = 'none';
+      esconderFormsLogin();
     }
 
     // ====================== BOLETIM PÚBLICO (somente leitura) ======================
@@ -3413,24 +3841,25 @@
       professorLogado = null;
       document.getElementById('tela-boletim-publico').style.display = 'none';
       document.getElementById('tela-login').style.display = 'block';
+      esconderFormsLogin();
     }
 
-    function atualizarBoletimPublico() {
+    function atualizarBoletimPublico(btn) {
       if (!estado.appsUrl) {
-        alert('Nuvem não configurada. Os dados mostram apenas o armazenamento local.');
+        notificar('Nuvem não configurada. Os dados mostram apenas o armazenamento local.', 'aviso');
         return;
       }
-      const btn = event?.target?.closest('button');
-      if (btn) { btn.disabled = true; btn.textContent = '⏳ Atualizando...'; }
+      const alvo = (btn && btn.tagName === 'BUTTON') ? btn : null;
+      if (alvo) { alvo.disabled = true; alvo.textContent = '⏳ Atualizando...'; }
       carregarDaNuvem().then(function (dados) {
         if (dados) {
           aplicarDadosNuvem(dados, false); // false = não preservar locais (recarrega tudo da nuvem)
         }
-        if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar'; }
+        if (alvo) { alvo.disabled = false; alvo.textContent = '🔄 Atualizar'; }
       }).catch(function (e) {
         console.error('Erro ao atualizar:', e);
-        if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar'; }
-        alert('Falha ao recarregar da nuvem: ' + e.message);
+        if (alvo) { alvo.disabled = false; alvo.textContent = '🔄 Atualizar'; }
+        notificar('Falha ao recarregar da nuvem: ' + e.message);
       });
     }
 
@@ -3660,7 +4089,7 @@
     // Exportar boletim público para Excel (reusa lógica existente)
     function exportarBoletimPublicoExcel() {
       const turmaId = document.getElementById('select-turma-boletim-publico').value;
-      if (!turmaId) { alert('Selecione uma turma primeiro.'); return; }
+      if (!turmaId) { notificar('Selecione uma turma primeiro.'); return; }
       const turma = getTurma(turmaId);
       if (!turma) return;
       const disciplinasVisiveis = (turma.disciplinas || []);
@@ -3669,7 +4098,7 @@
 
     function exportarBoletimPublicoPDF() {
       const turmaId = document.getElementById('select-turma-boletim-publico').value;
-      if (!turmaId) { alert('Selecione uma turma primeiro.'); return; }
+      if (!turmaId) { notificar('Selecione uma turma primeiro.'); return; }
       const turma = getTurma(turmaId);
       if (!turma) return;
       const disciplinasVisiveis = (turma.disciplinas || []);
@@ -3751,7 +4180,40 @@
         const alvo = t.getAttribute('data-tab');
         const pertence = t.closest('.stats-wrap');
         const contem = pertence && (pertence.querySelector('#stats-analises' + suffix) || pertence.querySelector('#stats-ajuda' + suffix));
-        if (contem) t.classList.toggle('active', alvo === aba);
+        if (contem) {
+          t.classList.toggle('active', alvo === aba);
+          t.setAttribute('aria-selected', alvo === aba ? 'true' : 'false');
+        }
+      });
+    }
+
+    // ---------- MONTAGEM DAS TELAS DE ESTATÍSTICAS ----------
+    // O conteúdo das estatísticas existe UMA única vez no HTML (dentro de
+    // <template id="tpl-estatisticas">) e é clonado para as duas telas:
+    // sufixo '' (tela livre) e '-sistema' (aba do sistema). Elimina a
+    // duplicação de ~160 linhas no index.html.
+    function aplicarSufixoEstatisticas(raiz, sufixo) {
+      if (!sufixo) return;
+      raiz.querySelectorAll('[id]').forEach(function (el) { el.id = el.id + sufixo; });
+      raiz.querySelectorAll('[data-fn]').forEach(function (el) {
+        if (el.getAttribute('data-fn') === 'mostrarAbaStats') {
+          const args = interpretarArgs(el.getAttribute('data-args'));
+          args[0] = sufixo;
+          el.setAttribute('data-args', JSON.stringify(args));
+        }
+      });
+    }
+
+    function montarTelasEstatisticas() {
+      const tpl = document.getElementById('tpl-estatisticas');
+      if (!tpl || !tpl.content) return;
+      [['stats-wrap-livre', ''], ['stats-wrap-sistema', '-sistema']].forEach(function (par) {
+        const alvo = document.getElementById(par[0]);
+        if (!alvo) return;
+        const clone = tpl.content.cloneNode(true);
+        aplicarSufixoEstatisticas(clone, par[1]);
+        alvo.innerHTML = '';
+        while (clone.firstChild) alvo.appendChild(clone.firstChild);
       });
     }
 
@@ -3885,7 +4347,7 @@
       // Popula select de turmas
       if (selTurma) {
         selTurma.innerHTML = '<option value="">Todas</option>' +
-          turmas.map(t => `<option value="${t.id}" ${t.id === turmaIdEscolhida ? 'selected' : ''}>${esc(t.nome)}</option>`).join('');
+          turmas.map(t => `<option value="${esc(t.id)}" ${t.id === turmaIdEscolhida ? 'selected' : ''}>${esc(t.nome)}</option>`).join('');
       }
 
       // Evita filtro "fantasma": se a turma escolhida não existe mais (foi excluída
@@ -3906,7 +4368,7 @@
       });
       if (selDisc) {
         selDisc.innerHTML = '<option value="">Todas</option>' +
-          todasDiscs.map(d => `<option value="${d.id}" ${d.id === discIdEscolhida ? 'selected' : ''}>${esc(d.nome)}</option>`).join('');
+          todasDiscs.map(d => `<option value="${esc(d.id)}" ${d.id === discIdEscolhida ? 'selected' : ''}>${esc(d.nome)}</option>`).join('');
       }
 
       // Alunos
@@ -3918,7 +4380,7 @@
       });
       if (selAluno) {
         selAluno.innerHTML = '<option value="">Todos</option>' +
-          alunosTodas.map(a => `<option value="${a.id}" ${a.id === alunoIdEscolhido ? 'selected' : ''}>${esc(a.nome)}</option>`).join('');
+          alunosTodas.map(a => `<option value="${esc(a.id)}" ${a.id === alunoIdEscolhido ? 'selected' : ''}>${esc(a.nome)}</option>`).join('');
       }
 
       // Filtro "fantasma": disciplina/aluno que não existe mais na nova seleção
@@ -3937,7 +4399,9 @@
       ['turma', 'disciplina', 'bimestre', 'aluno'].forEach(f => {
         const el = document.getElementById('stats-filter-' + f + suffix);
         if (el && !el.dataset.bound) {
-          el.addEventListener('change', () => renderEstatisticas(origem));
+          // Debounce: mudanças rápidas de filtro re-renderizam uma única vez
+          // (recriar ~15 gráficos a cada clique é caro).
+          el.addEventListener('change', () => agendarRender('stats' + suffix, () => renderEstatisticas(origem), 250));
           el.dataset.bound = '1';
         }
       });
@@ -4444,7 +4908,22 @@
     }
 
     function makeChart(ctx, config, key) {
-      if (Chart && !window.__chartDarkApplied) {
+      if (typeof Chart === 'undefined') {
+        // CDN indisponível (offline): avisa no próprio canvas em vez de lançar erro.
+        try {
+          const canvas = ctx && ctx.canvas;
+          const c = canvas && canvas.getContext('2d');
+          if (c) {
+            c.clearRect(0, 0, canvas.width, canvas.height);
+            c.font = '13px sans-serif';
+            c.fillStyle = '#999';
+            c.textAlign = 'center';
+            c.fillText('Gráfico indisponível (Chart.js não carregou).', (canvas.width || 400) / 2, (canvas.height || 200) / 2);
+          }
+        } catch (e) { console.warn('Sem gráfico disponível:', e); }
+        return;
+      }
+      if (!window.__chartDarkApplied) {
         Chart.defaults.color = '#cbd5e1';
         Chart.defaults.borderColor = 'rgba(148,163,184,0.18)';
         if (Chart.defaults.scale) {
@@ -5132,15 +5611,26 @@
           if (perfilAtual) {
             renderAbaAtiva();
           }
-        } catch (err) { }
+        } catch (err) {
+          console.warn('Erro ao sincronizar dados de outra aba:', err);
+        }
       }
     });
 
-    (function inicializarAjudaEstatisticas() {
+    (function inicializarTelasEstatisticas() {
+      // Monta as duas telas a partir do template ANTES de preencher a ajuda
+      // (os ids stats-ajuda/stats-ajuda-sistema só existem após a montagem).
+      montarTelasEstatisticas();
       const ajudaHtml = montarAjudaEstatisticas();
       const elLivre = document.getElementById('stats-ajuda');
       const elSistema = document.getElementById('stats-ajuda-sistema');
       if (elLivre) elLivre.innerHTML = ajudaHtml;
       if (elSistema) elSistema.innerHTML = ajudaHtml;
     })();
+
+    // Delegação de eventos: todo o HTML usa data-fn/data-args (sem handlers
+    // inline), o que permite manter a CSP sem 'unsafe-inline' em script-src.
+    document.addEventListener('click', despacharEvento);
+    document.addEventListener('change', despacharEvento);
+    document.addEventListener('keydown', despacharEvento);
 

@@ -1,0 +1,10 @@
+{
+  "name": "sistema-rapido-de-notas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema de Lançamento de Notas — HTML/CSS/JS estático com backup na nuvem (Google Sheets/Apps Script).",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "verificar": "node tools/verificar.mjs"
+  }
+}

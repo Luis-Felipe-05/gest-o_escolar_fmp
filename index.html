@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob:; script-src 'self' file: 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' file: data:; connect-src 'self' https:; worker-src 'self' file: blob:; object-src 'none'; base-uri 'self' file:; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob:; script-src 'self' file: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' file: data:; connect-src 'self' https:; worker-src 'self' file: blob:; object-src 'none'; base-uri 'self' file:; form-action 'self'">
   <title>Sistema de Lançamento de Notas</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
     integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw"
@@ -24,6 +24,11 @@
 
 <body>
 
+  <noscript>
+    <div class="noscript-aviso">⚠️ Este sistema precisa de <b>JavaScript habilitado</b> para funcionar. Ative o JavaScript nas
+      configurações do navegador e recarregue a página.</div>
+  </noscript>
+
   <!-- TELA DE ACESSO RESTRITO (somente desenvolvedor) -->
   <div id="tela-acesso-restrito" class="container" style="max-width:450px; text-align:center; padding:40px; position:relative; display:none;">
     <h1 style="margin-bottom:10px;">🔒 Acesso Restrito</h1>
@@ -33,13 +38,14 @@
       <div class="form-field" style="text-align:left; max-width:300px; margin:0 auto 20px;">
         <label>Senha de Acesso</label>
         <input type="password" id="input-senha-restrito" placeholder="Digite a senha" autocomplete="new-password"
-          onkeypress="if(event.key==='Enter') validarAcessoRestrito()">
+          data-fn="validarAcessoRestrito" data-ev="keydown" data-key="Enter">
       </div>
-      <button class="btn-primary" onclick="validarAcessoRestrito()" style="max-width:300px;">🔓 Entrar</button>
+      <button class="btn-primary" data-fn="validarAcessoRestrito" style="max-width:300px;">🔓 Entrar</button>
+      <p id="erro-restrito" class="erro-login" role="alert" hidden></p>
     </div>
 
     <div id="restrito-content" style="display:none; text-align:left; margin-top:30px;">
-      <button onclick="sairAcessoRestrito()" class="btn-secondary" style="margin-bottom:20px; width:100%;">← Voltar ao Login</button>
+      <button data-fn="sairAcessoRestrito" class="btn-secondary" style="margin-bottom:20px; width:100%;">← Voltar ao Login</button>
 
       <!-- CONFIG NUVEM (GOOGLE SHEETS / APPS SCRIPT) -->
       <h3>☁️ Backup na Nuvem (Google Sheets / Apps Script)</h3>
@@ -56,8 +62,8 @@
           <label>URL do Apps Script (implantação /exec)</label>
           <input type="text" id="input-apps-url" placeholder="https://script.google.com/macros/s/XXXX/exec">
         </div>
-        <button class="btn-primary" onclick="salvarAppsUrl()">Salvar URL</button>
-        <button class="btn-success" onclick="testarAppsUrl()">Testar Conexão</button>
+        <button class="btn-primary" data-fn="salvarAppsUrl">Salvar URL</button>
+        <button class="btn-success" data-fn="testarAppsUrl">Testar Conexão</button>
       </div>
       <div id="apps-status-box" style="font-size:13px; margin-top:4px;"></div>
 
@@ -72,30 +78,30 @@
         <br><strong>Atenção:</strong> a restauração substitui todos os dados da nuvem pelos do arquivo.
       </div>
       <div class="form-row" style="align-items:center;">
-        <button type="button" class="btn-primary" onclick="baixarBackup()"
+        <button type="button" class="btn-primary" data-fn="baixarBackup"
           title="Baixa um arquivo .json com todos os dados da nuvem (turmas, alunos, notas, frequências e conceitos)">⬇️
           Baixar backup (.json)</button>
-        <button type="button" class="btn-success" onclick="restaurarBackupArquivo()"
+        <button type="button" class="btn-success" data-fn="restaurarBackupArquivo"
           title="Restaura os dados de um arquivo .json baixado anteriormente. Substitui os dados da nuvem.">⬆️
           Restaurar backup (.json)</button>
-        <button type="button" class="btn-secondary" onclick="restaurarBackupNuvem()"
+        <button type="button" class="btn-secondary" data-fn="restaurarBackupNuvem"
           title="Baixa da nuvem (Google Sheets / Apps Script) a versão mais recente dos dados e a aplica na tela.">🔄
           Recarregar da nuvem</button>
       </div>
       <input type="file" id="input-backup-arquivo" accept=".json,application/json" style="display:none;"
-        onchange="aplicarBackupArquivo(event)">
+        data-fn="aplicarBackupArquivo" data-ev="change" data-args='["@event"]'>
       <div id="backup-status-box" style="font-size:13px; margin-top:4px;"></div>
     </div>
   </div>
 
   <!-- TELA DE LOGIN -->
   <div id="tela-login" class="container" style="max-width:450px; text-align:center; padding:40px; position:relative;">
-    <button onclick="abrirEstatisticas()"
+    <button data-fn="abrirEstatisticas"
       style="position:absolute; top:14px; right:14px; padding:8px 14px; background:#00897b; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; box-shadow:0 2px 6px rgba(0,137,123,0.3);"
       title="Acesso livre">
       📊 Estatísticas
     </button>
-    <button onclick="abrirAcessoRestrito()"
+    <button data-fn="abrirAcessoRestrito"
       style="position:absolute; top:14px; left:14px; padding:8px 14px; background:#6a1b9a; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; box-shadow:0 2px 6px rgba(106,27,154,0.3);"
       title="Acesso restrito (desenvolvedor)">
       🔒 Restrito
@@ -104,38 +110,70 @@
     <p style="color:#8fa0bd; margin-bottom:30px; font-size:14px;">Selecione seu perfil para acessar o sistema</p>
 
     <div style="display:flex; flex-direction:column; gap:20px; align-items:center;">
-      <div onclick="entrarComoAdmin()"
+      <div class="cartao-login" role="button" tabindex="0" data-fn="abrirLoginAdmin"
         style="width:100%; max-width:300px; padding:25px 20px; background:#1a237e; color:white; border-radius:12px; cursor:pointer; transition:transform 0.2s, box-shadow 0.2s; box-shadow:0 4px 15px rgba(26,35,126,0.3);"
-        onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 6px 20px rgba(26,35,126,0.4)'"
-        onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(26,35,126,0.3)'">
+        aria-label="Entrar como Administrador">
         <div style="font-size:40px; margin-bottom:10px;">👑</div>
         <div style="font-size:18px; font-weight:700;">Administrador</div>
         <div style="font-size:12px; margin-top:5px; opacity:0.8;">Criar turmas, gerenciar disciplinas, alunos e notas
         </div>
       </div>
 
-      <div onclick="entrarComoProfessor()"
+      <div class="cartao-login" role="button" tabindex="0" data-fn="abrirLoginProfessor"
         style="width:100%; max-width:300px; padding:25px 20px; background:#2e7d32; color:white; border-radius:12px; cursor:pointer; transition:transform 0.2s, box-shadow 0.2s; box-shadow:0 4px 15px rgba(46,125,50,0.3);"
-        onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 6px 20px rgba(46,125,50,0.4)'"
-        onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(46,125,50,0.3)'">
+        aria-label="Entrar como Professor">
         <div style="font-size:40px; margin-bottom:10px;">📚</div>
         <div style="font-size:18px; font-weight:700;">Professor</div>
         <div style="font-size:12px; margin-top:5px; opacity:0.8;">Lançar notas nas disciplinas que você leciona</div>
       </div>
 
-      <div onclick="abrirBoletimPublico()"
+      <div class="cartao-login" role="button" tabindex="0" data-fn="abrirBoletimPublico"
         style="width:100%; max-width:300px; padding:25px 20px; background:#00695c; color:white; border-radius:12px; cursor:pointer; transition:transform 0.2s, box-shadow 0.2s; box-shadow:0 4px 15px rgba(0,105,92,0.3);"
-        onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 6px 20px rgba(0,105,92,0.4)'"
-        onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(0,105,92,0.3)'">
+        aria-label="Abrir Boletim Final público (somente leitura)">
         <div style="font-size:40px; margin-bottom:10px;">📋</div>
         <div style="font-size:18px; font-weight:700;">Boletim Final</div>
         <div style="font-size:12px; margin-top:5px; opacity:0.8;">Visualizar boletim completo (somente leitura)</div>
       </div>
     </div>
 
-    <div style="margin-top:25px; padding:12px; background:#f5f5f5; border-radius:8px; font-size:12px; color:#666;">
-      <strong>Dica de segurança:</strong> a senha inicial do administrador é <code>admin123</code> —
-      troque-a na aba do administrador assim que entrar, e não compartilhe as senhas dos professores.
+    <!-- FORMULÁRIO DE LOGIN — ADMINISTRADOR (substitui o prompt antigo) -->
+    <div id="form-login-admin" class="form-login" hidden>
+      <h3>👑 Entrar como Administrador</h3>
+      <div class="form-field">
+        <label for="input-senha-admin-login">Senha do administrador</label>
+        <input type="password" id="input-senha-admin-login" autocomplete="current-password"
+          data-fn="enviarLoginAdmin" data-ev="keydown" data-key="Enter">
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn-primary" data-fn="enviarLoginAdmin">Entrar</button>
+        <button type="button" class="btn-secondary" data-fn="esconderFormsLogin">Cancelar</button>
+      </div>
+      <p id="erro-login-admin" class="erro-login" role="alert" hidden></p>
+    </div>
+
+    <!-- FORMULÁRIO DE LOGIN — PROFESSOR (substitui o prompt antigo) -->
+    <div id="form-login-professor" class="form-login" hidden>
+      <h3>📚 Entrar como Professor</h3>
+      <div class="form-field">
+        <label for="input-nome-professor">Nome do professor</label>
+        <input type="text" id="input-nome-professor" autocomplete="username"
+          data-fn="focarCampo" data-ev="keydown" data-key="Enter" data-args='["input-senha-professor"]'>
+      </div>
+      <div class="form-field">
+        <label for="input-senha-professor">Senha</label>
+        <input type="password" id="input-senha-professor" autocomplete="current-password"
+          data-fn="enviarLoginProfessor" data-ev="keydown" data-key="Enter">
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn-primary" data-fn="enviarLoginProfessor">Entrar</button>
+        <button type="button" class="btn-secondary" data-fn="esconderFormsLogin">Cancelar</button>
+      </div>
+      <p id="erro-login-professor" class="erro-login" role="alert" hidden></p>
+    </div>
+
+    <div class="dica-seguranca">
+      <strong>🔒 Dica de segurança:</strong> troque a senha do administrador assim que entrar (aba do administrador) e
+      não compartilhe as senhas dos professores. As senhas são guardadas como <b>hash</b> — nunca em texto puro.
     </div>
   </div>
 
@@ -144,12 +182,13 @@
     <div class="stats-topbar">
       <div class="brand">📊 Estatísticas do Sistema</div>
       <div class="nav-login">
-        <button class="btn-admin" onclick="sairParaLogin()">👑 Entrar como Admin</button>
-        <button class="btn-prof" onclick="sairParaLogin()">📚 Entrar como Professor</button>
+        <button class="btn-admin" data-fn="sairParaLogin">👑 Entrar como Admin</button>
+        <button class="btn-prof" data-fn="sairParaLogin">📚 Entrar como Professor</button>
       </div>
     </div>
 
-    <div class="stats-wrap">
+    <!-- CONTEÚDO DAS ESTATÍSTICAS: fonte única, clonada com sufixo por montarTelasEstatisticas(). -->
+    <template id="tpl-estatisticas">
       <div class="stats-header">
         <div>
           <h2 id="stats-titulo">Visão Geral do Desempenho</h2>
@@ -160,10 +199,12 @@
         </div>
       </div>
 
-      <div class="stats-tabs">
-        <button class="stats-tab active" data-tab="analises" onclick="mostrarAbaStats('', 'analises')">📊
+      <div class="stats-tabs" role="tablist" aria-label="Seções das estatísticas">
+        <button class="stats-tab active" role="tab" data-tab="analises" data-fn="mostrarAbaStats" data-args='["", "analises"]'
+          aria-selected="true">📊
           Análises</button>
-        <button class="stats-tab" data-tab="ajuda" onclick="mostrarAbaStats('', 'ajuda')">❓ Como Funciona</button>
+        <button class="stats-tab" role="tab" data-tab="ajuda" data-fn="mostrarAbaStats" data-args='["", "ajuda"]'
+          aria-selected="false">❓ Como Funciona</button>
       </div>
 
       <div class="stats-filters" id="stats-filters">
@@ -198,6 +239,8 @@
       </div>
 
       <div id="stats-analises">
+
+        <div class="kpi-grid" id="stats-kpis"></div>
 
         <div id="analise-textual" class="info-box" style="margin-bottom:18px;"></div>
 
@@ -312,7 +355,8 @@
       </div>
 
       <div id="stats-ajuda" style="display:none;"></div>
-    </div>
+    </template>
+    <div class="stats-wrap" id="stats-wrap-livre"></div>
   </div>
 
   <!-- TELA DE BOLETIM PÚBLICO (acesso livre, somente leitura) -->
@@ -320,9 +364,9 @@
     <div class="stats-topbar">
       <div class="brand">📋 Boletim Final — Visualização Pública</div>
       <div class="nav-login">
-        <button class="btn-admin" onclick="sairBoletimPublico()">👑 Entrar como Admin</button>
-        <button class="btn-prof" onclick="sairBoletimPublico()">📚 Entrar como Professor</button>
-        <button class="btn-secondary" onclick="sairBoletimPublico()">← Voltar</button>
+        <button class="btn-admin" data-fn="sairBoletimPublico">👑 Entrar como Admin</button>
+        <button class="btn-prof" data-fn="sairBoletimPublico">📚 Entrar como Professor</button>
+        <button class="btn-secondary" data-fn="sairBoletimPublico">← Voltar</button>
       </div>
     </div>
 
@@ -340,14 +384,14 @@
       <div class="form-row" style="margin-bottom:20px;">
         <div class="form-field select-turma" style="flex:1; max-width:400px;">
           <label>Turma</label>
-          <select id="select-turma-boletim-publico" onchange="renderBoletimPublico()">
+          <select id="select-turma-boletim-publico" data-fn="renderBoletimPublico" data-ev="change">
             <option value="">-- Selecione uma turma --</option>
           </select>
         </div>
         <div class="form-field" style="align-self:flex-end; display:flex; gap:8px;">
-          <button type="button" class="btn-secondary" onclick="atualizarBoletimPublico()" title="Recarregar dados da nuvem">🔄 Atualizar</button>
-          <button type="button" class="btn-primary" id="btn-exportar-boletim-publico" onclick="exportarBoletimPublicoExcel()" disabled>📥 Exportar Excel</button>
-          <button type="button" class="btn-primary" id="btn-exportar-boletim-publico-pdf" onclick="exportarBoletimPublicoPDF()" disabled>🖨️ Exportar PDF</button>
+          <button type="button" class="btn-secondary" data-fn="atualizarBoletimPublico" data-args='["@el"]' title="Recarregar dados da nuvem">🔄 Atualizar</button>
+          <button type="button" class="btn-primary" id="btn-exportar-boletim-publico" data-fn="exportarBoletimPublicoExcel" disabled>📥 Exportar Excel</button>
+          <button type="button" class="btn-primary" id="btn-exportar-boletim-publico-pdf" data-fn="exportarBoletimPublicoPDF" disabled>🖨️ Exportar PDF</button>
         </div>
       </div>
 
@@ -361,7 +405,7 @@
       <h1>Sistema de Lançamento de Notas</h1>
       <div style="display:flex; align-items:center; gap:15px;">
         <span id="usuario-logado-info" style="font-size:13px; color:#666;"></span>
-        <button onclick="sair()" class="btn-danger btn-sm">Sair</button>
+        <button data-fn="sair" class="btn-danger btn-sm">Sair</button>
       </div>
     </div>
 
@@ -383,7 +427,7 @@
           <label>Senha para acessar o modo admin de notas</label>
           <input type="password" id="input-senha-admin" placeholder="Defina uma senha" autocomplete="new-password">
         </div>
-        <button class="btn-primary" onclick="salvarSenhaAdmin()">Salvar Senha</button>
+        <button class="btn-primary" data-fn="salvarSenhaAdmin">Salvar Senha</button>
       </div>
 
       <!-- CRIAR TURMA -->
@@ -392,13 +436,13 @@
         <div class="form-field">
           <label>Nome da Turma</label>
           <input type="text" id="input-turma" placeholder="Ex: 9º Ano A"
-            onkeypress="if(event.key==='Enter') criarTurma()">
+            data-fn="criarTurma" data-ev="keydown" data-key="Enter">
         </div>
-        <button class="btn-primary" onclick="criarTurma()">Criar Turma</button>
-        <button class="btn-secondary" onclick="popularDemo()"
+        <button class="btn-primary" data-fn="criarTurma">Criar Turma</button>
+        <button class="btn-secondary" data-fn="popularDemo"
           title="Cria uma turma 9º Ano A com 20 alunos, 4 disciplinas e 4 bimestres de notas já preenchidas (para visualizar as estatísticas)">🎲
           Popular Demo (20 alunos)</button>
-        <button class="btn-primary" onclick="popularCompleto()"
+        <button class="btn-primary" data-fn="popularCompleto"
           title="Cria 2 turmas de exemplo (35 alunos, 7 disciplinas, professores, notas dos 4 bimestres, frequências, 5º Conceito e Situação Final) para visualizar Estatísticas, Boletim e Frequências">📚
           Popular Completo (2 turmas)</button>
       </div>
@@ -426,13 +470,13 @@
       <div class="form-row">
         <div class="form-field select-turma">
           <label>Selecionar Turma</label>
-          <select id="select-turma-notas" onchange="renderTabelaNotas()">
+          <select id="select-turma-notas" data-fn="renderTabelaNotas" data-ev="change">
             <option value="">-- Selecione uma turma --</option>
           </select>
         </div>
         <div class="form-field">
           <label>Bimestre</label>
-          <select id="select-bimestre-notas" onchange="renderTabelaNotas()"></select>
+          <select id="select-bimestre-notas" data-fn="renderTabelaNotas" data-ev="change"></select>
         </div>
       </div>
 
@@ -441,173 +485,7 @@
 
     <!-- ABA ESTATÍSTICAS (admin e professor) -->
     <div id="aba-estatisticas" class="tab-content">
-      <div class="stats-wrap" style="padding:0;">
-        <div class="stats-header">
-          <div>
-            <h2 id="stats-titulo-sistema">Visão Geral do Desempenho</h2>
-            <span class="badge" id="stats-escopo-badge-sistema">Acesso Livre</span>
-          </div>
-          <div style="font-size:12px; color:#666;">
-            Atualizado em: <span id="stats-atualizado-em-sistema">--</span>
-          </div>
-        </div>
-
-        <div class="stats-tabs">
-          <button class="stats-tab active" data-tab="analises" onclick="mostrarAbaStats('-sistema', 'analises')">📊
-            Análises</button>
-          <button class="stats-tab" data-tab="ajuda" onclick="mostrarAbaStats('-sistema', 'ajuda')">❓ Como
-            Funciona</button>
-        </div>
-
-        <div class="stats-filters" id="stats-filters-sistema">
-          <div class="form-field">
-            <label>Turma</label>
-            <select id="stats-filter-turma-sistema">
-              <option value="">Todas</option>
-            </select>
-          </div>
-          <div class="form-field">
-            <label>Disciplina</label>
-            <select id="stats-filter-disciplina-sistema">
-              <option value="">Todas</option>
-            </select>
-          </div>
-          <div class="form-field">
-            <label>Bimestre</label>
-            <select id="stats-filter-bimestre-sistema">
-              <option value="">Todos (Geral)</option>
-              <option value="1">1º Bimestre</option>
-              <option value="2">2º Bimestre</option>
-              <option value="3">3º Bimestre</option>
-              <option value="4">4º Bimestre</option>
-            </select>
-          </div>
-          <div class="form-field">
-            <label>Aluno</label>
-            <select id="stats-filter-aluno-sistema">
-              <option value="">Todos</option>
-            </select>
-          </div>
-        </div>
-
-        <div id="stats-analises-sistema">
-
-          <div class="kpi-grid" id="stats-kpis-sistema"></div>
-
-          <div id="analise-textual-sistema" class="info-box" style="margin-bottom:18px;"></div>
-
-          <!-- ===== SEÇÃO 1: RESUMO GERAL ===== -->
-          <h3 style="margin:24px 0 12px; color:#1a237e; border-bottom:2px solid #1a237e; padding-bottom:6px;">📊
-            Panorama Geral</h3>
-          <div class="charts-grid">
-            <div class="chart-card">
-              <h4>📈 Média Geral por Bimestre</h4>
-              <div class="chart-container"><canvas id="chart-evolucao-sistema"></canvas></div>
-              <div class="metodo-nota">ℹ️ Nesta média, <b>bimestre vazio/traço conta como 0</b> e a divisão é feita pelo
-                <b>total de alunos × disciplinas</b>. Por isso ela pode <b>diferir</b> da "Média da Sala por Bimestre"
-                do Boletim Final (que usa só as notas lançadas).</div>
-            </div>
-            <div class="chart-card">
-              <h4>🥧 Aprovação × Reprovação</h4>
-              <div class="chart-container"><canvas id="chart-aprovados-sistema"></canvas></div>
-            </div>
-            <div class="chart-card">
-              <h4>🍩 Distribuição Geral de Notas</h4>
-              <div class="chart-container"><canvas id="chart-notas-donut-sistema"></canvas></div>
-            </div>
-            <div class="chart-card">
-              <h4>🏫 Média por Turma</h4>
-              <div class="chart-container"><canvas id="chart-turmas-sistema"></canvas></div>
-            </div>
-          </div>
-
-          <!-- ===== SEÇÃO 2: MÉDIA DA SALA POR DISCIPLINA ===== -->
-          <h3 style="margin:24px 0 12px; color:#1a237e; border-bottom:2px solid #1a237e; padding-bottom:6px;">📚 Média
-            da Sala por Disciplina</h3>
-          <div class="charts-grid">
-            <div class="chart-card">
-              <h4>📊 Média geral por disciplina</h4>
-              <div class="chart-container"><canvas id="chart-disciplinas-sistema"></canvas></div>
-            </div>
-            <div class="chart-card">
-              <h4>🧊 Min / Média / Máx por disciplina</h4>
-              <div class="chart-container"><canvas id="chart-minmax-sistema"></canvas></div>
-            </div>
-            <div class="chart-card wide">
-              <h4>📚 Desempenho por Disciplina × Bimestre</h4>
-              <div class="chart-container"><canvas id="chart-disc-bim-sistema"></canvas></div>
-            </div>
-            <div class="chart-card wide">
-              <h4>🎯 Evolução por Disciplina (Radar)</h4>
-              <div class="chart-container"><canvas id="chart-radar-sistema"></canvas></div>
-            </div>
-          </div>
-
-          <!-- ===== SEÇÃO 3: SITUAÇÃO E RECUPERAÇÃO ===== -->
-          <h3 style="margin:24px 0 12px; color:#1a237e; border-bottom:2px solid #1a237e; padding-bottom:6px;">🟠
-            Recuperação e Situação dos Alunos</h3>
-          <div class="charts-grid">
-            <div class="chart-card">
-              <h4>🟠 Alunos em Recuperação por Semestre</h4>
-              <div class="chart-container"><canvas id="chart-recuperacao-sistema"></canvas></div>
-            </div>
-            <div class="chart-card">
-              <h4>📉 Histograma de Notas</h4>
-              <div class="chart-container"><canvas id="chart-dist-sistema"></canvas></div>
-            </div>
-            <div class="chart-card">
-              <h4>🎓 Situação dos Alunos</h4>
-              <div id="tabela-situacao-aluno-sistema" style="max-height:300px; overflow-y:auto;"></div>
-            </div>
-            <div class="chart-card wide">
-              <h4>📋 Alunos em Recuperação / Situação Crítica (detalhado)</h4>
-              <div id="tabela-situacao-sistema" style="max-height:420px; overflow:auto;"></div>
-            </div>
-          </div>
-
-          <!-- ===== SEÇÃO 3.5: FREQUÊNCIA ===== -->
-          <h3 style="margin:24px 0 12px; color:#1a237e; border-bottom:2px solid #1a237e; padding-bottom:6px;">🗓️
-            Frequência dos Alunos</h3>
-          <div class="charts-grid">
-            <div class="chart-card wide">
-              <h4>🗓️ Frequência Média por Bimestre (critério mínimo: 75%)</h4>
-              <div class="chart-container"><canvas id="chart-frequencia-sistema"></canvas></div>
-            </div>
-            <div class="chart-card wide">
-              <h4>📋 Frequência por Aluno — OK (&gt;75%) / Limite (=75%) / Atenção (&lt;75%)</h4>
-              <div id="tabela-frequencia-sistema" style="max-height:420px; overflow:auto;"></div>
-            </div>
-          </div>
-
-          <!-- ===== SEÇÃO 4: RANKINGS E DESEMPENHO INDIVIDUAL ===== -->
-          <h3 style="margin:24px 0 12px; color:#1a237e; border-bottom:2px solid #1a237e; padding-bottom:6px;">🏆 Ranking
-            e Desempenho Individual</h3>
-          <div class="charts-grid">
-            <div class="chart-card wide">
-              <h4>👥 Média Geral do Aluno por Disciplina</h4>
-              <div id="tabela-media-aluno-sistema" style="max-height:420px; overflow:auto;"></div>
-            </div>
-            <div class="chart-card">
-              <h4>🏆 Melhores Alunos</h4>
-              <div id="ranking-melhores-sistema" style="max-height:300px; overflow-y:auto;"></div>
-            </div>
-            <div class="chart-card">
-              <h4>⚠️ Alunos em Situação Crítica</h4>
-              <div id="ranking-risco-sistema" style="max-height:300px; overflow-y:auto;"></div>
-            </div>
-            <div class="chart-card">
-              <h4>📉 Piores Alunos</h4>
-              <div id="ranking-piores-sistema" style="max-height:300px; overflow-y:auto;"></div>
-            </div>
-            <div class="chart-card wide">
-              <h4>👥 Relatório por Turma</h4>
-              <div id="tabela-por-turma-sistema" style="max-height:420px; overflow:auto;"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="stats-ajuda-sistema" style="display:none;"></div>
-      </div>
+      <div class="stats-wrap" id="stats-wrap-sistema" style="padding:0;"></div>
     </div>
 
     <!-- ABA BOLETIM FINAL (apenas admin) -->
@@ -624,14 +502,14 @@
       <div class="form-row">
         <div class="form-field select-turma">
           <label>Selecionar Turma</label>
-          <select id="select-turma-boletim" onchange="renderBoletimFinal()">
+          <select id="select-turma-boletim" data-fn="renderBoletimFinal" data-ev="change">
             <option value="">-- Selecione uma turma --</option>
           </select>
         </div>
         <div class="form-field" style="align-self:flex-end; display:flex; gap:8px;">
-          <button type="button" class="btn-primary" id="btn-exportar-boletim" onclick="exportarBoletimExcel()"
+          <button type="button" class="btn-primary" id="btn-exportar-boletim" data-fn="exportarBoletimExcel"
             disabled>📥 Exportar em Excel</button>
-          <button type="button" class="btn-primary" id="btn-exportar-boletim-pdf" onclick="exportarBoletimPDF()"
+          <button type="button" class="btn-primary" id="btn-exportar-boletim-pdf" data-fn="exportarBoletimPDF"
             disabled>🖨️ Exportar em PDF</button>
         </div>
       </div>
@@ -650,7 +528,7 @@
       <div class="form-row">
         <div class="form-field select-turma">
           <label>Selecionar Turma</label>
-          <select id="select-turma-conceito" onchange="renderConceitoFinal()">
+          <select id="select-turma-conceito" data-fn="renderConceitoFinal" data-ev="change">
             <option value="">-- Selecione uma turma --</option>
           </select>
         </div>
@@ -673,7 +551,7 @@
       <div class="form-row">
         <div class="form-field select-turma">
           <label>Selecionar Turma</label>
-          <select id="select-turma-frequencias" onchange="renderFrequencias()">
+          <select id="select-turma-frequencias" data-fn="renderFrequencias" data-ev="change">
             <option value="">-- Selecione uma turma --</option>
           </select>
         </div>
