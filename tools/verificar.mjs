@@ -14,18 +14,29 @@ function ler(rel) { return fs.readFileSync(path.join(RAIZ, rel), 'utf8'); }
 function falhar(msg) { falhas.push(msg); }
 function avisar(msg) { avisos.push(msg); }
 
-const appJs = ler('app.js');
-const indexHtml = ler('index.html');
+// Ordem canônica de carga dos módulos (a mesma do index.html).
+const ORDEM = [
+  'config.js', 'nuvem.js', 'turmas.js', 'cadastro.js', 'notas.js',
+  'acesso.js', 'boletim.js', 'classificacao.js', 'telas-publicas.js',
+  'estatisticas.js', 'init.js'
+];
 
-// ---------- 1. Sintaxe ----------
-{
-  const r = spawnSync(process.execPath, ['--check', path.join(RAIZ, 'app.js')], { encoding: 'utf8' });
-  if (r.status !== 0) falhar(`Sintaxe inválida em app.js:\n${r.stderr}`);
+const indexHtml = ler('index.html');
+const modulos = ORDEM.map(nome => ({ nome: 'js/' + nome, texto: ler('js/' + nome) }));
+// Código do sistema concatenado (para checagens globais).
+const appJs = modulos.map(m => m.texto).join('\n');
+// Todo o código + HTML (para varreduras de padrões).
+const fontes = [...modulos, { nome: 'index.html', texto: indexHtml }];
+
+// ---------- 1. Sintaxe de todos os módulos ----------
+for (const { nome } of modulos) {
+  const r = spawnSync(process.execPath, ['--check', path.join(RAIZ, nome)], { encoding: 'utf8' });
+  if (r.status !== 0) falhar(`Sintaxe inválida em ${nome}:\n${r.stderr}`);
 }
 
 // ---------- 2. Sem handlers inline (permite CSP sem 'unsafe-inline') ----------
 const reHandler = /\son(click|change|keypress|keydown|mouseover|mouseout|error|load|submit)=/i;
-for (const [nome, texto] of [['index.html', indexHtml], ['app.js', appJs]]) {
+for (const { nome, texto } of fontes) {
   texto.split('\n').forEach((linha, i) => {
     const t = linha.trim();
     if (t.startsWith('//') || t.startsWith('/*') || t.startsWith('*') || t.startsWith('<!--')) return; // comentário
@@ -47,7 +58,7 @@ for (const [nome, texto] of [['index.html', indexHtml], ['app.js', appJs]]) {
 // ---------- 4. Sem alert()/prompt()/confirm() bloqueantes ----------
 {
   const reCall = /(^|[^.\w])(alert|prompt|confirm)\(/;
-  for (const [nome, texto] of [['app.js', appJs], ['index.html', indexHtml]]) {
+  for (const { nome, texto } of fontes) {
     texto.split('\n').forEach((linha, i) => {
       const t = linha.trim();
       if (t.startsWith('//') || t.startsWith('/*') || t.startsWith('*') || t.startsWith('<!--')) return;
@@ -66,14 +77,14 @@ for (const [nome, texto] of [['index.html', indexHtml], ['app.js', appJs]]) {
   let f;
   while ((f = reFuncao.exec(appJs)) !== null) funcoes.add(f[1]);
   const reDataFn = /data-fn="([A-Za-z_$][\w$]*)"/g;
-  for (const [nome, texto] of [['index.html', indexHtml], ['app.js', appJs]]) {
+  for (const { nome, texto } of fontes) {
     texto.split('\n').forEach((linha, i) => {
       const t = linha.trim();
       if (t.startsWith('//') || t.startsWith('/*') || t.startsWith('*') || t.startsWith('<!--')) return; // comentário
       let d;
       reDataFn.lastIndex = 0;
       while ((d = reDataFn.exec(linha)) !== null) {
-        if (!funcoes.has(d[1])) falhar(`${nome}:${i + 1}: data-fn="${d[1]}" não tem função correspondente em app.js`);
+        if (!funcoes.has(d[1])) falhar(`${nome}:${i + 1}: data-fn="${d[1]}" não tem função correspondente no código`);
       }
     });
   }
@@ -82,28 +93,41 @@ for (const [nome, texto] of [['index.html', indexHtml], ['app.js', appJs]]) {
 // ---------- 6. Interpolações de value em input passam por esc() ----------
 {
   const reValor = /value="\$\{([^}]*)\}"/g;
-  let v;
-  while ((v = reValor.exec(appJs)) !== null) {
-    const expr = v[1].trim();
-    if (!expr.includes('esc(')) falhar(`app.js: value="${'${'}${expr}}" sem esc()`);
+  for (const { nome, texto } of modulos) {
+    let v;
+    reValor.lastIndex = 0;
+    while ((v = reValor.exec(texto)) !== null) {
+      const expr = v[1].trim();
+      if (!expr.includes('esc(')) falhar(`${nome}: value="${'${'}${expr}}" sem esc()`);
+    }
   }
 }
 
 // ---------- 7. Sem catches vazios ----------
 {
   const reCatch = /catch\s*\([^)]*\)\s*\{\s*\}/g;
-  let c;
-  while ((c = reCatch.exec(appJs)) !== null) {
-    const linha = appJs.slice(0, c.index).split('\n').length;
-    falhar(`app.js:${linha} catch vazio (erro engolido)`);
+  for (const { nome, texto } of modulos) {
+    let c;
+    reCatch.lastIndex = 0;
+    while ((c = reCatch.exec(texto)) !== null) {
+      const linha = texto.slice(0, c.index).split('\n').length;
+      falhar(`${nome}:${linha} catch vazio (erro engolido)`);
+    }
   }
 }
 
-// ---------- 8. Acesso restrito: trava de tentativas ----------
+// ---------- 8. Acesso restrito: hash + trava de tentativas ----------
 {
   if (!appJs.includes('travaAcessoRestrito')) falhar('Acesso restrito sem trava de tentativas (força bruta)');
-  if (!appJs.includes('senhaCorreta(senha, SENHA_ACESSO_RESTRITO)')) {
-    avisar('Acesso restrito não usa senhaCorreta() — senha ainda em texto no fonte (ver README)');
+  if (!appJs.includes('senhaCorreta(senha, SENHA_ACESSO_RESTRITO_HASH)')) {
+    falhar('Acesso restrito não compara com SENHA_ACESSO_RESTRITO_HASH via senhaCorreta()');
+  }
+  if (/SENHA_ACESSO_RESTRITO\s*=/.test(appJs)) {
+    falhar('Constante da senha do Acesso Restrito em TEXTO no fonte (deve ser hash v1:)');
+  }
+  const mHash = appJs.match(/SENHA_ACESSO_RESTRITO_HASH\s*=\s*'([^']+)'/);
+  if (!mHash || !/^v1:[0-9a-f]{64}$/.test(mHash[1])) {
+    falhar('SENHA_ACESSO_RESTRITO_HASH fora do formato v1:<sha256hex>');
   }
 }
 
@@ -116,10 +140,24 @@ for (const [nome, texto] of [['index.html', indexHtml], ['app.js', appJs]]) {
 
 // ---------- 10. Estrutura esperada ----------
 {
-  for (const arquivo of ['index.html', 'app.js', 'styles.css', 'package.json', 'README.md', '.gitignore']) {
+  for (const arquivo of ['index.html', 'styles.css', 'package.json', 'README.md', '.gitignore']) {
     if (!fs.existsSync(path.join(RAIZ, arquivo))) falhar(`Arquivo ausente: ${arquivo}`);
   }
   if (!fs.existsSync(path.join(RAIZ, 'test', 'regras.test.js'))) falhar('Testes de regras ausentes (test/regras.test.js)');
+  // O antigo monólito não deve voltar: o código vive apenas em js/.
+  if (fs.existsSync(path.join(RAIZ, 'app.js'))) {
+    falhar('app.js existe no projeto (o código deve viver apenas nos módulos js/)');
+  }
+}
+
+// ---------- 11. Divisão em módulos (index.html ⇄ js/) ----------
+{
+  const carregados = [...indexHtml.matchAll(/<script src="(js\/[^"]+|app\.js)"><\/script>/g)].map(m => m[1]);
+  const esperados = ORDEM.map(f => 'js/' + f);
+  if (JSON.stringify(carregados) !== JSON.stringify(esperados)) {
+    falhar(`Scripts do index.html fora da ordem canônica (esperado: ${esperados.join(', ')}; atual: ${carregados.join(', ') || 'nenhum'})`);
+  }
+  if (carregados.includes('app.js')) falhar('index.html ainda carrega app.js (deve carregar apenas js/*.js)');
 }
 
 // ---------- Resultado ----------
@@ -132,4 +170,4 @@ if (falhas.length) {
   falhas.forEach(x => console.log('  ✖ ' + x));
   process.exit(1);
 }
-console.log('✅ Verificações OK (sintaxe, CSP, sem handlers inline, sem alert/prompt/confirm, data-fn válidos, catches, login em formulário).');
+console.log(`✅ Verificações OK (sintaxe dos ${ORDEM.length} módulos, CSP, sem handlers inline, sem alert/prompt/confirm, data-fn válidos, esc em inputs, catches, senha do acesso restrito em hash, login em formulário, divisão coerente).`);

@@ -3,9 +3,9 @@
 // notificações e delegação de eventos. Rodar com: npm test
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { carregarApp } = require('./apoio');
+const { carregarApp, arquivosDoApp } = require('./apoio');
 
-const app = carregarApp(['app.js']);
+const app = carregarApp(arquivosDoApp());
 
 test('sha256Hex confere com vetores conhecidos (FIPS 180-4)', () => {
   assert.equal(
@@ -168,4 +168,19 @@ test('interpretarArgs tolera JSON inválido', () => {
   assert.equal(JSON.stringify(app.rodar(`interpretarArgs('["a", 1]')`)), '["a",1]');
   assert.equal(JSON.stringify(app.rodar(`interpretarArgs('{{{')`)), '[]');
   assert.equal(JSON.stringify(app.rodar(`interpretarArgs(null)`)), '[]');
+});
+
+test('senha do Acesso Restrito existe só como hash v1: (sem texto no fonte)', () => {
+  const hash = app.rodar(`SENHA_ACESSO_RESTRITO_HASH`);
+  assert.match(hash, /^v1:[0-9a-f]{64}$/);
+  // Nenhuma definição em texto puro permanece no código (varre todos os módulos)
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const fonte = arquivosDoApp()
+    .map(f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'))
+    .join('\n');
+  assert.equal(/SENHA_ACESSO_RESTRITO\s*=/.test(fonte), false);
+  // Senha errada continua sendo rejeitada
+  assert.equal(app.rodar(`senhaCorreta('qualquer-coisa', SENHA_ACESSO_RESTRITO_HASH)`), false);
+  assert.equal(app.rodar(`senhaCorreta('', SENHA_ACESSO_RESTRITO_HASH)`), false);
 });

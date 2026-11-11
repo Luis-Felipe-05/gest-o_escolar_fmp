@@ -13,18 +13,29 @@ Google Sheets através de um Google Apps Script.
 - **Teste E2E em navegador:** `node test/e2e.mjs` (abre o index.html no Chrome
   headless com rede bloqueada e exercita logins, cadastro, estatísticas,
   boletim público, modal e notificações — requer Google Chrome instalado).
-- **Verificações automáticas:** `npm run verificar` (sintaxe, CSP, handlers
-  inline, `data-fn` órfãos, catches vazios, login em formulário).
+- **Verificações automáticas:** `npm run verificar` (sintaxe dos 11 módulos, CSP, handlers
+  inline, `data-fn` órfãos, catches vazios, login em formulário, coerência da divisão
+  `index.html` ⇄ `js/` e garantia de que não há `app.js` solto).
 
 ## Estrutura
 
 | Arquivo | Papel |
 |---|---|
-| `index.html` | Telas (login, sistema, estatísticas, boletim público, acesso restrito). As estatísticas existem uma única vez num `<template>` e são clonadas para as duas telas. |
-| `app.js` | Toda a lógica: persistência, nuvem (fila/diff/conflitos), CRUD, renders, gráficos e exportações. |
+| `index.html` | Telas (login, sistema, estatísticas, boletim público, acesso restrito). As estatísticas existem uma única vez num `<template>` e são clonadas para as duas telas. Carrega os módulos de `js/` na ordem canônica. |
+| `js/config.js` | Configuração da nuvem, `esc()`, hash de senhas (SHA-256), sanitização de estado, notificações, confirmação modal, trava de tentativas, debounce e delegação de eventos. |
+| `js/nuvem.js` | Sincronização com Google Sheets (fila, diff/remendos, conflitos) e backup/restauração. |
+| `js/turmas.js` | Abas, criação de turmas e dados de demonstração. |
+| `js/cadastro.js` | CRUD de disciplinas, professores, alunos, importação de planilha e `renderAdmin`. |
+| `js/notas.js` | Tabela de notas e 5º Conceito (cálculo e renders). |
+| `js/acesso.js` | Login em formulário (admin/professor), sessão e abas do sistema. |
+| `js/boletim.js` | Boletim Final, frequências, situação final e exportações Excel/PDF. |
+| `js/classificacao.js` | Regras de aprovação/recuperação/labels (o coração das regras de negócio). |
+| `js/telas-publicas.js` | Acesso Restrito (hash + trava) e Boletim Público. |
+| `js/estatisticas.js` | Cálculo e renderização de estatísticas, gráficos e rankings. |
+| `js/init.js` | Inicialização, sincronização entre abas e delegação de eventos. |
 | `styles.css` | Tema escuro + responsivo + componentes (toast, modal, login). |
-| `test/` | Testes de regressão das regras de negócio (médias, aprovação, recuperação, frequência, hash de senha, sanitização de estado). |
-| `tools/` | `dividir-app.js` (script de divisão do monólito, já executado) e `verificar.mjs` (lint). |
+| `test/` | Testes de regressão das regras de negócio (19), E2E headless (`node test/e2e.mjs`) e harness em `apoio.js`. |
+| `tools/` | `verificar.mjs` — lint do projeto (`npm run verificar`). |
 
 ## Segurança — o que foi feito
 
@@ -32,7 +43,8 @@ Google Sheets através de um Google Apps Script.
   professores nunca ficam em texto puro no `localStorage`/nuvem; a migração é
   automática e idempotente (`normalizarSegredos`).
 - **Login em formulário** com trava de tentativas (3 erros → 5 s) no lugar de
-  `prompt()`/`alert()`; o mesmo no Acesso Restrito (5 erros → 60 s).
+  `prompt()`/`alert()`; o mesmo no Acesso Restrito (5 erros → 60 s), cuja senha
+  também passou a existir **apenas como hash** no código-fonte.
 - **XSS:** toda interpolação de valor de usuário passa por `esc()`; as
   notificações usam `textContent` (nunca HTML).
 - **CSP sem `script-src 'unsafe-inline'`** — todos os handlers viraram
@@ -50,14 +62,14 @@ Google Sheets através de um Google Apps Script.
 2. **A chave secreta do Apps Script está no código do cliente** — é como o
    protocolo atual funciona; trocar exige alterar também o `Código.gs`
    (arquivo `APPS_SCRIPT_NUVEM.txt`, que não está neste repositório).
-3. **A senha do “Acesso Restrito” continua em texto no fonte** — mover para hash
-   exige recalcular a constante (pendente de autorização explícita; a trava de
-   tentativas já está ativa).
-4. **Estatísticas e Boletim público continuam sem autenticação** — mantido
+3. **Estatísticas e Boletim público continuam sem autenticação** — mantido
    propositalmente, conforme pedido.
-5. **`app.js` ainda é um arquivo grande** — a divisão em módulos foi escrita
-   (`tools/dividir-app.js`) mas o comando de divisão precisou ser autorizado
-   separadamente; os testes e o verificador cobrem o código atual.
+
+> A divisão do antigo `app.js` (5.638 linhas) em 11 módulos foi feita em
+> novembro de 2026 e comprovada **byte a byte** na migração; hoje a coerência
+> `index.html` ⇄ `js/` é conferida de forma permanente por `npm run verificar`
+> (que também falha se um `app.js` solto voltar a existir). O monólito
+> original permanece no histórico do Git (`git show <commit>:app.js`).
 
 ## Regras de negócio (garantidas por testes)
 

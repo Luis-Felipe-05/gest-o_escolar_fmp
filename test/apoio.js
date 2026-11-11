@@ -64,6 +64,15 @@ function criarContextoCanvas() {
 
 // Carrega os arquivos do sistema no contexto e devolve helpers.
 // `arquivos`: lista de caminhos relativos à raiz do projeto.
+// Se omitida, lê a ordem canônica dos módulos diretamente do index.html
+// (fonte única de verdade da ordem de carga).
+function arquivosDoApp() {
+  const html = fs.readFileSync(path.join(RAIZ, 'index.html'), 'utf8');
+  const encontrados = [...html.matchAll(/<script src="(js\/[^"]+)"><\/script>/g)].map(m => m[1]);
+  if (!encontrados.length) throw new Error('Nenhum módulo js/ encontrado no index.html');
+  return encontrados;
+}
+
 function carregarApp(arquivos) {
   const elementos = new Map();
   const store = new Map();
@@ -139,4 +148,4 @@ function carregarApp(arquivos) {
   };
 }
 
-module.exports = { carregarApp, criarElemento };
+module.exports = { carregarApp, criarElemento, arquivosDoApp };

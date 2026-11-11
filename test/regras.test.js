@@ -3,9 +3,9 @@
 // Rodar com: npm test
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { carregarApp } = require('./apoio');
+const { carregarApp, arquivosDoApp } = require('./apoio');
 
-const app = carregarApp(['app.js']);
+const app = carregarApp(arquivosDoApp());
 
 test('esc() neutraliza HTML em valores do usuário', () => {
   assert.equal(app.rodar(`esc('<img src=x onerror=alert(1)>')`), '&lt;img src=x onerror=alert(1)&gt;');
